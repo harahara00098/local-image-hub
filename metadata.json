@@ -1,0 +1,8 @@
+{
+  "name": "Local Image Hub",
+  "description": "A local network image sharing app with path-based routing and a polished folder explorer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
