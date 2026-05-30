@@ -834,15 +834,6 @@ function PathExplorer() {
     })
   };
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-        <p className="mt-4 text-zinc-500 font-medium">Scanning folders...</p>
-      </div>
-    );
-  }
-
   const renderContent = () => {
     if (!data) return null;
 
