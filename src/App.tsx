@@ -357,6 +357,23 @@ function PathExplorer() {
     navigateTo(paths[startIdx], 1);
   };
 
+  const startSlideshowForSelected = () => {
+    if (!data || data.type !== "directory") return;
+    
+    const paths = sortedMediaItems
+      .filter(item => selectedPaths.has(item.path))
+      .map(item => item.path);
+    
+    if (paths.length === 0) {
+      alert("スライドショー可能なメディアが選択されていません。");
+      return;
+    }
+    
+    setSlideshowPaths(paths);
+    setIsPlaying(true);
+    navigateTo(paths[0], 1);
+  };
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1578,6 +1595,13 @@ function PathExplorer() {
                 </>
               )}
             </div>
+            <button 
+              onClick={startSlideshowForSelected}
+              className="p-2 hover:text-blue-400 transition-colors"
+              title="スライドショー"
+            >
+              <Play className="w-4 h-4" />
+            </button>
             <button 
               onClick={handleMoveSelected}
               className="p-2 hover:text-blue-400 transition-colors"

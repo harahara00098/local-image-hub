@@ -41,5 +41,10 @@ Windowsのバックスラッシュ(`\`)とURLのスラッシュ(`/`)の混在に
 ## 7. マニュアル管理
 - 新機能を追加した際は、必ず `README.md` を更新し、アプリ内のヘルプモーダルから確認できるようにしてください。
 
+## 8. テスト戦略
+- **フレームワーク**: Jest と React Testing Library を使用します。
+- **UIテスト**: 新機能を追加した場合は、必ず `src/App.test.tsx` にテストケースを追加し、`npm run test` でパスすることを確認してください。
+- **モック**: `lucide-react` のアイコンはテスト環境でのエラーを防ぐため、テスト内では `<span data-testid="icon-IconName">IconName</span>` のようにモック化して検証してください。
+
 ---
 *このガイドラインは Gemini Code Assist との協調作業によって生成されました。*
