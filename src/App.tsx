@@ -147,7 +147,6 @@ function PathExplorer() {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [isBulkMoving, setIsBulkMoving] = useState(false);
   const [isAddingBulkTag, setIsAddingBulkTag] = useState(false);
-  const tagListRef = useRef<HTMLDivElement>(null);
   const sortBy = "extension";
 
   const navigateTo = useCallback((path: string | null, dir: number) => {
@@ -204,13 +203,6 @@ function PathExplorer() {
     }
     return () => { document.body.style.overflow = "unset"; };
   }, [isZoomed]);
-
-  // タグが切り替わったときに横スクロールバーをリセット
-  useEffect(() => {
-    if (tagListRef.current) {
-      tagListRef.current.scrollLeft = 0;
-    }
-  }, [tagQuery]);
 
   // 検索クエリの更新を低優先度にしてタイピングの引っかかりを防止
   const deferredSearchQuery = useDeferredValue(searchQuery);
@@ -286,17 +278,6 @@ function PathExplorer() {
     let tags = data.popularTags;
     if (q) {
       tags = tags.filter(({ tag }) => tag.toLowerCase().includes(q));
-    }
-
-    if (targetTagsLower.length > 0) {
-      return [...tags].sort((a, b) => {
-        const aIsSelected = targetTagsLower.includes(a.tag.toLowerCase());
-        const bIsSelected = targetTagsLower.includes(b.tag.toLowerCase());
-
-        if (aIsSelected && !bIsSelected) return -1;
-        if (!aIsSelected && bIsSelected) return 1;
-        return 0;
-      });
     }
 
     return tags;
@@ -1431,7 +1412,7 @@ function PathExplorer() {
             )}
 
             {data.type === "directory" && filteredPopularTags.length > 0 && (
-              <div ref={tagListRef} className="mt-3 flex items-center gap-3 overflow-x-auto pb-2 scroll-smooth no-scrollbar">
+              <div className="mt-3 flex items-center gap-3 overflow-x-auto pb-2 scroll-smooth no-scrollbar">
                 <div className="flex items-center gap-1.5 text-zinc-400 shrink-0">
                   <Tag className="w-3.5 h-3.5" />
                   <span className="text-[10px] font-bold uppercase tracking-wider">タグで絞り込み:</span>
