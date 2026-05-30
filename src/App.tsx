@@ -1420,8 +1420,9 @@ function PathExplorer() {
                   <Check className={`w-3.5 h-3.5 ${isSelected ? 'stroke-[3px]' : ''}`} />
                 </div>
                 <Link 
-                  to={item.path}
-                  onClick={() => {
+                  to={selectedPaths.size > 0 ? "" : item.path}
+                  onClick={(e) => {
+                    if (selectedPaths.size > 0) toggleSelection(e, item.path);
                     if (item.isDirectory) setSearchQuery("");
                   }}
                   className="block bg-white border border-zinc-200 rounded-xl overflow-hidden hover:shadow-md hover:border-blue-200 transition-all h-full"
