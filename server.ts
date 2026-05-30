@@ -4,6 +4,26 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import multer from "multer";
 
+// 指定フォルダ配下のすべてのファイルを再帰的に取得
+const getAllFiles = (dirPath: string, baseDir: string): string[] => {
+  let results: string[] = [];
+  if (!fs.existsSync(dirPath)) return results;
+
+  const list = fs.readdirSync(dirPath, { withFileTypes: true });
+  for (const item of list) {
+    const fullPath = path.join(dirPath, item.name);
+    if (item.isDirectory()) {
+      results = results.concat(getAllFiles(fullPath, baseDir));
+    } else {
+      // IMAGES_DIR からの相対パスを作成し、先頭にスラッシュを付与してフォーマットを統一 (/test/a.jpg 等)
+      let normPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+      if (!normPath.startsWith('/')) normPath = '/' + normPath;
+      results.push(normPath);
+    }
+  }
+  return results;
+};
+
 async function startServer() {
   const app = express();
   const PORT = 80;
@@ -26,12 +46,13 @@ async function startServer() {
     }
   };
 
+  // 親フォルダの継承タグを取得
   const getParentTags = (itemPath: string, metadata: any) => {
     const parts = itemPath.split('/').filter(Boolean);
     const tags = new Set<string>();
     let current = '';
     if (metadata['/']) metadata['/'].forEach((t: string) => tags.add(t));
-    
+
     for (let i = 0; i < parts.length - 1; i++) {
       current += '/' + parts[i];
       if (metadata[current]) {
@@ -51,23 +72,21 @@ async function startServer() {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  // Ensure images directory exists
+  // images ディレクトリと初期構造が存在することを確認
   if (!fs.existsSync(IMAGES_DIR)) {
     fs.mkdirSync(IMAGES_DIR, { recursive: true });
-    // Create some placeholder structure
     fs.mkdirSync(path.join(IMAGES_DIR, "travel"), { recursive: true });
     fs.mkdirSync(path.join(IMAGES_DIR, "work"), { recursive: true });
   }
 
-  // Configure storage for uploads
+  // アップロードファイルの保存先とファイル名の設定
   const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-      // フロントエンドから送られた path を取得
       const subPath = req.body.path || "/";
       const decodedSubPath = decodeURIComponent(subPath);
       const fullPath = path.join(IMAGES_DIR, decodedSubPath);
 
-      // セキュリティチェック: IMAGES_DIR の外に出ないようにする
+      // セキュリティチェック: IMAGES_DIR の外に出ないように制限
       const absoluteImagesDir = path.resolve(IMAGES_DIR);
       const absoluteFullPath = path.resolve(fullPath);
       if (!absoluteFullPath.startsWith(absoluteImagesDir)) {
@@ -77,21 +96,103 @@ async function startServer() {
       cb(null, fullPath);
     },
     filename: (req, file, cb) => {
-      // 元のファイル名を使用
       cb(null, file.originalname);
     }
   });
 
   const upload = multer({ storage });
 
-  // API to list folders and images
+  // タグから指定フォルダ配下のファイルを検索するAPI
+  app.get("/api/search-by-tag", (req, res) => {
+    const targetTag = req.query.tag as string;
+    const currentDir = (req.query.dir as string) || "/";
+
+    if (!targetTag) {
+      return res.status(400).json({ error: "タグの指定が必要です" });
+    }
+
+    const targetTagsLower = targetTag.split(',').map(t => t.trim().toLowerCase());
+    const decodedDir = decodeURIComponent(currentDir);
+    const metadata = getMetadata();
+
+    // 現在のディレクトリ配下の実ファイルを再帰的に取得
+    const currentDirPhysical = path.join(IMAGES_DIR, decodedDir.replace(/^\//, ''));
+    const allFiles = getAllFiles(currentDirPhysical, IMAGES_DIR);
+
+    // ヘッダー表示用のタグ集計
+    const dirPrefix = decodedDir === '/' ? '/' : decodedDir + '/';
+    const allTagCounts: Record<string, number> = {};
+
+    for (const [key, tags] of Object.entries(metadata)) {
+      if (!Array.isArray(tags)) continue;
+      const normKey = key.startsWith('/') ? key : '/' + key;
+      if (decodedDir === '/' || normKey.startsWith(dirPrefix) || normKey === decodedDir) {
+        tags.forEach(t => { allTagCounts[t] = (allTagCounts[t] || 0) + 1; });
+      }
+    }
+
+    // 再帰的に親フォルダの継承タグを取得する内部ヘルパー関数
+    const getParentTagsLocal = (itemPath: string) => {
+      const parts = itemPath.split('/').filter(Boolean);
+      const pTags = new Set<string>();
+      if (metadata['/']) metadata['/'].forEach((t: string) => pTags.add(t));
+      let curr = '';
+      for (let i = 0; i < parts.length - 1; i++) {
+        curr += '/' + parts[i];
+        const folderTags = metadata[curr] || metadata[curr.replace(/^\//, '')] || [];
+        folderTags.forEach((t: string) => pTags.add(t));
+      }
+      return Array.from(pTags);
+    };
+
+    const finalItems = [];
+
+    // 実ファイルのタグ情報を走査し、ターゲットタグを満たすか判定（AND検索）
+    for (const itemPath of allFiles) {
+      const filename = path.basename(itemPath);
+      const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(filename);
+      if (!isImage) continue;
+
+      const ownTags = metadata[itemPath] || metadata[itemPath.replace(/^\//, '')] || [];
+      const parentTags = getParentTagsLocal(itemPath);
+
+      const itemAllTagsLower = [...ownTags, ...parentTags].map(t => t.toLowerCase());
+      const hasAllTargetTags = targetTagsLower.every(t => itemAllTagsLower.includes(t));
+
+      if (hasAllTargetTags) {
+        finalItems.push({
+          name: filename,
+          isDirectory: false,
+          path: itemPath,
+          isImage: isImage,
+          tags: ownTags,
+          parentTags: parentTags,
+          folderPreviews: [],
+          hasSubDirectories: false
+        });
+      }
+    }
+
+    const popularTags = Object.entries(allTagCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag, count]) => ({ tag, count }));
+
+    res.json({
+      type: "directory",
+      items: finalItems,
+      popularTags: popularTags,
+      prevPath: null,
+      nextPath: null,
+      currentTags: metadata[decodedDir] || metadata[decodedDir.replace(/^\//, '')] || []
+    });
+  });
+
+  // フォルダおよびファイルの一覧を取得するAPI
   app.get("/api/browse*", (req, res) => {
-    // req.params[0] will be something like "/a/b"
     const subPath = req.params[0] || "/";
     const decodedSubPath = decodeURIComponent(subPath);
     const fullPath = path.join(IMAGES_DIR, decodedSubPath);
 
-    // Security check: ensure fullPath is within IMAGES_DIR
     const absoluteImagesDir = path.resolve(IMAGES_DIR);
     const absoluteFullPath = path.resolve(fullPath);
 
@@ -103,31 +204,28 @@ async function startServer() {
       return res.status(404).json({ error: "見つかりません" });
     }
 
-    const metadata = getMetadata();
-
     try {
       const stats = fs.statSync(fullPath);
       const metadata = getMetadata();
 
-      // 現在のパスの接頭辞を作成（再帰的な集計用）
       const currentPathPrefix = decodedSubPath === '/' ? '' : (decodedSubPath.endsWith('/') ? decodedSubPath : decodedSubPath + '/');
 
-      // --- 最適化: このディレクトリ配下の全タグを一括集計 ---
+      // ディレクトリ配下の全タグの一括集計およびキャッシュ作成
       const tagCounts: Record<string, number> = {};
-      const pathTagsMap: Record<string, string[]> = {}; // 高速参照用
-      const folderTagsMap: Record<string, Set<string>> = {}; // フォルダごとの集計キャッシュ
+      const pathTagsMap: Record<string, string[]> = {};
+      const folderTagsMap: Record<string, Set<string>> = {};
 
       Object.entries(metadata).forEach(([key, tags]) => {
         if (key.startsWith(currentPathPrefix)) {
           const tagList = Array.isArray(tags) ? tags : [];
           pathTagsMap[key] = tagList;
-          
+
           if (tagList.length > 0) {
             tagList.forEach((t: string) => {
               tagCounts[t] = (tagCounts[t] || 0) + 1;
             });
 
-            // 親フォルダへのタグ波及を計算 (O(N) で済むように事前集計)
+            // 親フォルダへのタグ波及を事前集計
             let parts = key.split('/');
             let currentAggPath = '';
             for (let i = 1; i < parts.length - 1; i++) {
@@ -142,11 +240,10 @@ async function startServer() {
       const popularTags = Object.entries(tagCounts)
         .sort((a, b) => b[1] - a[1])
         .map(([tag, count]) => ({ tag, count }));
-      // ----------------------------------------------
 
       const parentDir = path.dirname(fullPath);
       const isCurrentDirectory = stats.isDirectory();
-      
+
       const parentItems = fs.readdirSync(parentDir, { withFileTypes: true })
         .filter(item => !item.name.startsWith('.'))
         .filter(item => {
@@ -154,11 +251,11 @@ async function startServer() {
           return !item.isDirectory();
         })
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-      
+
       const currentIndex = parentItems.findIndex(item => item.name === path.basename(fullPath));
       let prevPath = null;
       let nextPath = null;
-      
+
       if (currentIndex !== -1 && decodedSubPath !== "/") {
         if (currentIndex > 0) {
           const prevItem = parentItems[currentIndex - 1];
@@ -181,7 +278,6 @@ async function startServer() {
             const relativePath = path.join(decodedSubPath, item.name).replace(/\\/g, '/');
             const itemPath = relativePath.startsWith('/') ? relativePath : '/' + relativePath;
 
-            // Define itemBase here, common properties for both files and directories
             const itemBase = {
               name: item.name,
               isDirectory: item.isDirectory(),
@@ -189,35 +285,33 @@ async function startServer() {
               isImage: /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(item.name),
             };
 
-            let folderPreviews = [];
+            let folderPreviews: string[] = [];
             let hasSubDirectories = false;
 
             if (item.isDirectory()) {
               try {
                 const subItems = fs.readdirSync(path.join(fullPath, item.name), { withFileTypes: true });
-                // フォルダ内の画像を探す (最大4枚)
+                // フォルダ内のプレビュー用画像を取得 (最大4枚)
                 const images = subItems
                   .filter(si => !si.isDirectory() && /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(si.name))
                   .slice(0, 4);
-                
+
                 folderPreviews = images.map(img => {
                   const p = path.join(itemPath, img.name).replace(/\\/g, '/');
                   return p.startsWith('/') ? p : '/' + p;
                 });
 
-                // サブフォルダがあるかチェック
                 hasSubDirectories = subItems.some(si => si.isDirectory() && !si.name.startsWith('.'));
               } catch (e) {
-                // アクセス権限エラーなどは無視
+                // アクセス権限エラー等はスキップ
               }
             }
 
-            // フォルダの場合は、自身のタグと配下のパスに一致するタグを事前に集計したマップから取得してマージ
             if (item.isDirectory()) {
               const ownTags = pathTagsMap[itemPath] || [];
               const inheritedTags = Array.from(folderTagsMap[itemPath] || []);
               const mergedTags = Array.from(new Set([...ownTags, ...inheritedTags]));
-              
+
               return {
                 ...itemBase,
                 tags: mergedTags,
@@ -230,23 +324,23 @@ async function startServer() {
                 ...itemBase,
                 tags: pathTagsMap[itemPath] || [],
                 parentTags: getParentTags(itemPath, metadata),
-                folderPreviews: [], // Files don't have folderPreviews
-                hasSubDirectories: false // Files don't have subdirectories
+                folderPreviews: [],
+                hasSubDirectories: false
               };
             }
           });
-        res.json({ 
-          type: "directory", 
-          items: result, 
-          popularTags, 
-          prevPath, 
+        res.json({
+          type: "directory",
+          items: result,
+          popularTags,
+          prevPath,
           nextPath,
           currentTags: metadata[decodedSubPath] || []
         });
       } else {
-        res.json({ 
-          type: "file", 
-          name: path.basename(fullPath), 
+        res.json({
+          type: "file",
+          name: path.basename(fullPath),
           path: decodedSubPath,
           isImage: /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fullPath),
           tags: metadata[decodedSubPath] || [],
@@ -260,12 +354,12 @@ async function startServer() {
     }
   });
 
-  // API to handle file uploads
+  // ファイルアップロード受取API
   app.post("/api/upload", upload.single("file"), (req, res) => {
     res.json({ message: "ファイルが正常にアップロードされました" });
   });
 
-  // API to get all directories (recursive)
+  // 全フォルダ構造を再帰的に取得するAPI
   app.get("/api/all-folders", (req, res) => {
     const getDirs = (dir: string, list: string[] = []) => {
       const items = fs.readdirSync(dir, { withFileTypes: true });
@@ -286,7 +380,7 @@ async function startServer() {
     }
   });
 
-  // API to get all unique tags
+  // システムに存在するすべての固有タグを取得するAPI
   app.get("/api/all-tags", (req, res) => {
     const metadata = getMetadata();
     const allTags = new Set<string>();
@@ -301,12 +395,12 @@ async function startServer() {
     res.json(Array.from(allTags).sort());
   });
 
-  // API to serve README.md
+  // README.md 配信API
   app.get("/README.md", (req, res) => {
     res.sendFile(path.join(process.cwd(), "README.md"));
   });
 
-  // API to rename a file
+  // ファイル/フォルダの名前変更API
   app.post("/api/rename", (req, res) => {
     const { path: subPath, newName } = req.body;
     if (!subPath || !newName) return res.status(400).json({ error: "パスと新しい名前が必要です" });
@@ -319,8 +413,8 @@ async function startServer() {
 
     try {
       fs.renameSync(oldFullPath, newFullPath);
-      
-      // メタデータも更新
+
+      // 変更に合わせてメタデータ内の該当パスキーを一括更新
       const metadata = getMetadata();
       const newSubPath = path.join(path.dirname(decodedSubPath), newName).replace(/\\/g, '/');
       const fixedNewSubPath = newSubPath.startsWith('/') ? newSubPath : '/' + newSubPath;
@@ -333,7 +427,6 @@ async function startServer() {
         if (key === decodedSubPath) {
           updatedMetadata[fixedNewSubPath] = metadata[key];
         } else if (key.startsWith(oldPrefix)) {
-          // 配下のファイルのパスを置換
           const newKey = fixedNewSubPath + key.substring(decodedSubPath.length);
           updatedMetadata[newKey] = metadata[key];
         } else {
@@ -348,7 +441,7 @@ async function startServer() {
     }
   });
 
-  // API to move multiple files to another directory
+  // 複数ファイルの一括移動API
   app.post("/api/bulk-move", (req, res) => {
     const { paths: subPaths, destDir } = req.body;
     if (!subPaths || !Array.isArray(subPaths) || destDir === undefined) {
@@ -380,7 +473,7 @@ async function startServer() {
 
       try {
         fs.renameSync(oldFullPath, newFullPath);
-        
+
         const newSubPath = path.join(decodedDestDir, filename).replace(/\\/g, '/');
         const fixedNewSubPath = newSubPath.startsWith('/') ? newSubPath : '/' + newSubPath;
 
@@ -399,7 +492,7 @@ async function startServer() {
     res.json({ results });
   });
 
-  // API to delete multiple files
+  // 複数ファイル/フォルダの一括削除API
   app.post("/api/bulk-delete", (req, res) => {
     const { paths: subPaths } = req.body;
     if (!subPaths || !Array.isArray(subPaths)) return res.status(400).json({ error: "パス（配列）が必要です" });
@@ -449,7 +542,7 @@ async function startServer() {
     res.json({ results });
   });
 
-  // API to add a tag to multiple files
+  // 複数ファイルへのタグ一括追加API
   app.post("/api/bulk-add-tag", (req, res) => {
     const { paths: subPaths, tag } = req.body;
     if (!subPaths || !Array.isArray(subPaths) || !tag) return res.status(400).json({ error: "パス（配列）とタグが必要です" });
@@ -470,21 +563,21 @@ async function startServer() {
     res.json({ message: "タグを一括追加しました" });
   });
 
-  // API to move a file to another directory
+  // 単一ファイルの移動API
   app.post("/api/move", (req, res) => {
     const { path: subPath, destDir } = req.body;
     if (!subPath || destDir === undefined) return res.status(400).json({ error: "パスと移動先ディレクトリが必要です" });
 
     const decodedSubPath = decodeURIComponent(subPath);
     const decodedDestDir = decodeURIComponent(destDir);
-    
+
     const oldFullPath = path.join(IMAGES_DIR, decodedSubPath);
     const filename = path.basename(oldFullPath);
     const newFullPath = path.join(IMAGES_DIR, decodedDestDir, filename);
 
     const absoluteImagesDir = path.resolve(IMAGES_DIR);
-    if (!path.resolve(oldFullPath).startsWith(absoluteImagesDir) || 
-        !path.resolve(newFullPath).startsWith(absoluteImagesDir)) {
+    if (!path.resolve(oldFullPath).startsWith(absoluteImagesDir) ||
+      !path.resolve(newFullPath).startsWith(absoluteImagesDir)) {
       return res.status(403).json({ error: "アクセスが拒否されました" });
     }
 
@@ -507,7 +600,7 @@ async function startServer() {
     }
   });
 
-  // API to update tags
+  // 特定パスのタグ情報の更新API
   app.post("/api/tags", (req, res) => {
     const { path: subPath, tags } = req.body;
     if (!subPath || !tags) return res.status(400).json({ error: "パスとタグが必要です" });
@@ -520,7 +613,7 @@ async function startServer() {
     res.json({ message: "タグを更新しました" });
   });
 
-  // API to delete a file
+  // 単一ファイルの削除API
   app.delete("/api/delete", (req, res) => {
     const { path: subPath } = req.body;
     if (!subPath) return res.status(400).json({ error: "パスが必要です" });
@@ -531,12 +624,12 @@ async function startServer() {
     const absoluteImagesDir = path.resolve(IMAGES_DIR);
     const absoluteFullPath = path.resolve(fullPath);
 
-    // Windows のドライブレターやパスの違いを考慮したより安全なチェック
+    // OS間におけるパス構造の差異を許容する安全圏内チェック
     const relative = path.relative(absoluteImagesDir, absoluteFullPath);
     const isInside = relative && !relative.startsWith('..') && !path.isAbsolute(relative);
 
     if (!isInside) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         error: "アクセスが拒否されました",
         details: "imagesディレクトリ外のファイルは削除できません"
       });
@@ -549,7 +642,6 @@ async function startServer() {
     try {
       fs.unlinkSync(fullPath);
 
-      // メタデータ（タグ情報）からも削除
       const metadata = getMetadata();
       if (metadata[decodedSubPath]) {
         delete metadata[decodedSubPath];
@@ -563,7 +655,7 @@ async function startServer() {
     }
   });
 
-  // API to delete a directory
+  // ディレクトリの削除API (配下アセット・メタデータ含む)
   app.delete("/api/delete-dir", (req, res) => {
     const { path: subPath } = req.body;
     if (!subPath) return res.status(400).json({ error: "パスが必要です" });
@@ -588,7 +680,6 @@ async function startServer() {
     try {
       fs.rmSync(fullPath, { recursive: true, force: true });
 
-      // メタデータからも配下のアイテム含め削除
       const metadata = getMetadata();
       const prefix = decodedSubPath.endsWith('/') ? decodedSubPath : decodedSubPath + '/';
       Object.keys(metadata).forEach(key => {
@@ -605,7 +696,7 @@ async function startServer() {
     }
   });
 
-  // API to create a directory
+  // 新規ディレクトリ作成API
   app.post("/api/mkdir", (req, res) => {
     const { path: subPath, name } = req.body;
     if (!subPath || !name) return res.status(400).json({ error: "パスと名前が必要です" });
@@ -632,10 +723,10 @@ async function startServer() {
     }
   });
 
-  // Serve static images directly
+  // 画像・アセット用静的リソース配信
   app.use("/raw-images", express.static(IMAGES_DIR));
 
-  // Vite middleware for development
+  // 開発・プロダクションに応じたフロントエンド静的リソース配信ミドルウェア
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
