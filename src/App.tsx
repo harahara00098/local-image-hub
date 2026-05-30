@@ -67,6 +67,11 @@ const isVideoFile = (filename: string) => {
   return /\.(mp4|webm|ogg|mov)$/i.test(filename);
 };
 
+// 全角数字を半角に変換するユーティリティ
+const toHalfWidth = (val: string | number) => {
+  return String(val).replace(/[０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xfee0));
+};
+
 // パスの安全なデコードと正規化（Windows環境のバックスラッシュ対応）
 const normalizePath = (path: string) => {
   if (!path) return "";
@@ -125,9 +130,9 @@ function PathExplorer() {
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [slideshowRange, setSlideshowRange] = useState({ start: 1, end: 10 });
+  const [slideshowRange, setSlideshowRange] = useState<{ start: string | number; end: string | number }>({ start: 1, end: 10 });
   const [slideshowPaths, setSlideshowPaths] = useState<string[]>([]);
-  const [intervalSeconds, setIntervalSeconds] = useState(3);
+  const [intervalSeconds, setIntervalSeconds] = useState<string | number>(3);
   const [timeLeft, setTimeLeft] = useState(3);
   const scrollPositions = useRef<Record<string, number>>({});
   const [isZoomed, setIsZoomed] = useState(false);
@@ -261,6 +266,16 @@ function PathExplorer() {
     return sortedItems.filter(item => item.isImage || isVideoFile(item.name));
   }, [sortedItems]);
 
+  // フォルダ読み込み時やフィルタリング時に、スライドショーの範囲を現在のアイテム数に合わせる
+  useEffect(() => {
+    if (!isPlaying && data?.type === "directory") {
+      setSlideshowRange({
+        start: 1,
+        end: sortedMediaItems.length || 1
+      });
+    }
+  }, [data?.type, sortedMediaItems.length, isPlaying]);
+
   // 検索ワードに基づいて表示するタグボタンを絞り込む（選択中のタグは最優先表示）
   const filteredPopularTags = useMemo(() => {
     if (data?.type !== "directory" || !data.popularTags) return [];
@@ -338,7 +353,8 @@ function PathExplorer() {
 
   // ページが切り替わった際の状態リセット
   useEffect(() => {
-    setTimeLeft(intervalSeconds);
+    const interval = typeof intervalSeconds === 'number' ? intervalSeconds : (parseInt(toHalfWidth(intervalSeconds)) || 3);
+    setTimeLeft(interval);
     setIsAddingTag(false);
     setIsMovingFile(false);
     setIsAddingBulkTag(false);
@@ -361,7 +377,8 @@ function PathExplorer() {
 
         const isVideo = isVideoFile(data.name);
         const currentIndex = slideshowPaths.findIndex(p => normalizePath(p) === dataPathNorm);
-        const targetEndIndex = Math.min(slideshowRange.end - 1, slideshowPaths.length - 1);
+        const end = parseInt(String(slideshowRange.end)) || slideshowPaths.length;
+        const targetEndIndex = Math.min(end - 1, slideshowPaths.length - 1);
 
         if (currentIndex !== -1 && currentIndex <= targetEndIndex) {
           if (!isVideo) {
@@ -389,13 +406,15 @@ function PathExplorer() {
       if (dataPathNorm !== currentNorm) return;
 
       const currentIndex = slideshowPaths.findIndex(p => normalizePath(p) === dataPathNorm);
-      const targetEndIndex = Math.min(slideshowRange.end - 1, slideshowPaths.length - 1);
+      const end = parseInt(String(slideshowRange.end)) || slideshowPaths.length;
+      const targetEndIndex = Math.min(end - 1, slideshowPaths.length - 1);
 
       if (currentIndex !== -1) {
         if (currentIndex < targetEndIndex) {
           navigateTo(slideshowPaths[currentIndex + 1], 1);
         } else {
-          const startIdx = Math.max(0, Math.min(slideshowRange.start - 1, slideshowPaths.length - 1));
+          const start = parseInt(String(slideshowRange.start)) || 1;
+          const startIdx = Math.max(0, Math.min(start - 1, slideshowPaths.length - 1));
           navigateTo(slideshowPaths[startIdx], 1);
         }
       }
@@ -406,12 +425,38 @@ function PathExplorer() {
     if (!data || data.type !== "directory") return;
 
     const paths = sortedMediaItems.map(item => item.path);
-
     if (paths.length === 0) return;
+
+    // 実行時に全角を半角に変換して数値チェック（空文字などは NaN になる）
+    const startNum = parseInt(toHalfWidth(slideshowRange.start));
+    const endNum = parseInt(toHalfWidth(slideshowRange.end));
+    const intervalNum = parseInt(toHalfWidth(intervalSeconds));
+
+    if (isNaN(startNum) || isNaN(endNum) || isNaN(intervalNum)) {
+      alert("開始位置、終了位置、または秒数を数値で入力してください（空欄は不可です）。");
+      return;
+    }
+
+    const maxItems = sortedMediaItems.length;
+    if (startNum < 1 || startNum > maxItems) {
+      alert(`開始位置は 1 から ${maxItems} の範囲で入力してください。`);
+      return;
+    }
+
+    if (endNum < 1 || endNum > maxItems) {
+      alert(`終了位置は 1 から ${maxItems} の範囲で入力してください。`);
+      return;
+    }
+
+    if (startNum >= endNum) {
+      alert("終了位置は開始位置より後である必要があります。");
+      return;
+    }
+    
 
     setSlideshowPaths(paths);
     setIsPlaying(true);
-    const startIdx = Math.max(0, Math.min(slideshowRange.start - 1, paths.length - 1));
+    const startIdx = Math.max(0, Math.min(startNum - 1, paths.length - 1));
     navigateTo(paths[startIdx], 1);
   };
 
@@ -1155,21 +1200,29 @@ function PathExplorer() {
                   <div className="flex items-center gap-1 bg-zinc-100/50 border border-zinc-200 rounded-lg p-1">
                     <div className="flex items-center gap-1.5 px-2">
                       <input
-                        type="number"
-                        min="1"
-                        max={mediaItems.length}
+                        type="text"
+                        inputMode="numeric"
                         value={slideshowRange.start}
-                        onChange={(e) => setSlideshowRange(prev => ({ ...prev, start: parseInt(e.target.value) || 1 }))}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '' || /^[0-9０-９]+$/.test(val)) {
+                            setSlideshowRange(prev => ({ ...prev, start: val }));
+                          }
+                        }}
                         className="w-10 text-center text-xs font-semibold bg-white border border-zinc-200 rounded outline-none focus:border-blue-500 py-0.5"
                         title="スライドショー開始位置"
                       />
                       <span className="text-zinc-400 text-xs">-</span>
                       <input
-                        type="number"
-                        min="1"
-                        max={mediaItems.length}
+                        type="text"
+                        inputMode="numeric"
                         value={slideshowRange.end}
-                        onChange={(e) => setSlideshowRange(prev => ({ ...prev, end: parseInt(e.target.value) || 1 }))}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '' || /^[0-9０-９]+$/.test(val)) {
+                            setSlideshowRange(prev => ({ ...prev, end: val }));
+                          }
+                        }}
                         className="w-10 text-center text-xs font-semibold bg-white border border-zinc-200 rounded outline-none focus:border-blue-500 py-0.5"
                         title="スライドショー終了位置"
                       />
@@ -1177,10 +1230,15 @@ function PathExplorer() {
                     <div className="flex items-center gap-1.5 px-2 border-l border-zinc-200">
                       <span className="text-[10px] uppercase font-bold text-zinc-400 hidden sm:inline">秒</span>
                       <input
-                        type="number"
-                        min="1"
+                        type="text"
+                        inputMode="numeric"
                         value={intervalSeconds}
-                        onChange={(e) => setIntervalSeconds(Math.max(1, parseInt(e.target.value) || 3))}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '' || /^[0-9０-９]+$/.test(val)) {
+                            setIntervalSeconds(val);
+                          }
+                        }}
                         className="w-10 text-center text-xs font-semibold bg-white border border-zinc-200 rounded outline-none focus:border-blue-500 py-0.5"
                         title="スライドショーの間隔（秒）"
                       />
