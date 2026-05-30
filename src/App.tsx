@@ -9,6 +9,7 @@ interface Item {
   path: string;
   isImage: boolean;
   tags?: string[];
+  parentTags?: string[];
   folderPreviews?: string[];
   hasSubDirectories?: boolean;
 }
@@ -19,6 +20,7 @@ interface DirectoryResponse {
   popularTags: { tag: string; count: number }[];
   prevPath: string | null;
   nextPath: string | null;
+  currentTags?: string[];
 }
 
 interface FileResponse {
@@ -27,6 +29,7 @@ interface FileResponse {
   path: string;
   isImage: boolean;
   tags?: string[];
+  parentTags?: string[];
   prevPath: string | null;
   nextPath: string | null;
 }
@@ -77,13 +80,20 @@ const normalizePath = (path: string) => {
 };
 
 // エラー境界コンポーネント
-class ErrorBoundary extends React.Component<any, { hasError: boolean; error: Error | null }> {
-  constructor(props: any) {
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false, error: null };
+    (this as any).state = { hasError: false, error: null };
   }
 
-  static getDerivedStateFromError(error: Error) {
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     // 次のレンダリングでフォールバックUIを表示するためにstateを更新します。
     return { hasError: true, error };
   }
@@ -91,17 +101,17 @@ class ErrorBoundary extends React.Component<any, { hasError: boolean; error: Err
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {}
 
   render() {
-    if (this.state.hasError) {
+    if ((this as any).state.hasError) {
       return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-red-50 text-red-800 p-8">
           <h1 className="text-2xl font-bold mb-4">エラーが発生しました</h1>
           <p className="text-lg mb-2">アプリケーションの表示中に問題が発生しました。</p>
-          <p className="font-mono text-sm bg-red-100 p-3 rounded break-all">{this.state.error?.message || "不明なエラー"}</p>
+          <p className="font-mono text-sm bg-red-100 p-3 rounded break-all">{(this as any).state.error?.message || "不明なエラー"}</p>
           <button onClick={() => window.location.reload()} className="mt-6 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">ページを再読み込み</button>
         </div>
       );
     }
-    return this.props.children;
+    return (this as any).props.children;
   }
 }
 
@@ -705,12 +715,14 @@ function PathExplorer() {
   };
 
   const addTag = async (tagName: string) => {
-    if (!data || data.type !== "file") return;
+    if (!data) return;
     
     const newTag = tagName.trim();
     if (newTag === "") return;
     
-    const currentTags = data.tags || [];
+    const targetPath = data.type === "file" ? data.path : currentPath;
+    const currentTags = (data.type === "file" ? data.tags : data.currentTags) || [];
+    
     // 重複チェック (大文字小文字を区別しない)
     if (currentTags.some(t => t.toLowerCase() === newTag.toLowerCase())) {
       alert("そのタグは既に存在します。");
@@ -722,15 +734,19 @@ function PathExplorer() {
       const response = await fetch("/api/tags", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: data.path, tags: [...currentTags, newTag] }),
+        body: JSON.stringify({ path: targetPath, tags: [...currentTags, newTag] }),
       });
 
       if (!response.ok) throw new Error("タグの更新に失敗しました");
       
       // ステートを直接更新
       setData(prev => {
-        if (!prev || prev.type !== "file") return prev;
-        return { ...prev, tags: [...currentTags, newTag] };
+        if (!prev) return prev;
+        if (prev.type === "file") {
+          return { ...prev, tags: [...currentTags, newTag] };
+        } else {
+          return { ...prev, currentTags: [...currentTags, newTag] };
+        }
       });
       setIsAddingTag(false);
     } catch (err) {
@@ -756,26 +772,31 @@ function PathExplorer() {
   };
 
   const handleRemoveTag = async (tagToRemove: string) => {
-    if (!data || data.type !== "file") return;
+    if (!data) return;
     
     if (!confirm(`タグ "${tagToRemove}" を削除しますか？`)) return;
 
-    const currentTags = data.tags || [];
+    const targetPath = data.type === "file" ? data.path : currentPath;
+    const currentTags = (data.type === "file" ? data.tags : data.currentTags) || [];
     const newTags = currentTags.filter(t => t !== tagToRemove);
 
     try {
       const response = await fetch("/api/tags", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: data.path, tags: newTags }),
+        body: JSON.stringify({ path: targetPath, tags: newTags }),
       });
 
       if (!response.ok) throw new Error("タグの削除に失敗しました");
       
       // ステートを直接更新
       setData(prev => {
-        if (!prev || prev.type !== "file") return prev;
-        return { ...prev, tags: newTags };
+        if (!prev) return prev;
+        if (prev.type === "file") {
+          return { ...prev, tags: newTags };
+        } else {
+          return { ...prev, currentTags: newTags };
+        }
       });
     } catch (err) {
       alert(err instanceof Error ? err.message : "タグの削除に失敗しました");
@@ -978,6 +999,24 @@ function PathExplorer() {
                     >
                       <X className="w-2.5 h-2.5" />
                     </button>
+                  </div>
+                ))}
+                {data.parentTags?.map(tag => (
+                  <div 
+                    key={`parent-${tag}`}
+                    className="flex items-center gap-1 px-2 py-0.5 bg-zinc-100 text-zinc-500 text-[10px] font-bold rounded-full"
+                    title="親フォルダから継承されたタグ"
+                  >
+                    <span 
+                      onClick={() => {
+                        setSearchQuery(tag);
+                        setIsPlaying(false);
+                        navigate(parentPath);
+                      }}
+                      className="cursor-pointer hover:text-zinc-700"
+                    >
+                      {tag}
+                    </span>
                   </div>
                 ))}
                 <div className="relative">
@@ -1227,6 +1266,80 @@ function PathExplorer() {
             })}
           </nav>
 
+          {/* 現在のフォルダのタグ（ルート以外） */}
+          {data.type === "directory" && currentPath !== "/" && (
+            <div className="mt-3 px-1 flex flex-wrap gap-2 items-center">
+              <Tag className="w-3.5 h-3.5 text-zinc-400" />
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">フォルダのタグ:</span>
+              {data.currentTags?.map(tag => (
+                <div 
+                  key={tag}
+                  className="flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-600 text-[10px] font-bold rounded-full"
+                >
+                  <span 
+                    onClick={() => {
+                      setSearchQuery(tag);
+                      setIsPlaying(false);
+                      navigate("/");
+                    }}
+                    className="cursor-pointer hover:underline"
+                    title={`${tag} で検索してホームに戻る`}
+                  >
+                    {tag}
+                  </span>
+                  <button
+                    onClick={() => handleRemoveTag(tag)}
+                    className="p-0.5 hover:text-red-600 transition-colors border-l border-blue-200 ml-1 pl-1"
+                    title="タグを削除"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              ))}
+              <div className="relative">
+                <button 
+                  onClick={handleAddTag} 
+                  className={`p-1 rounded-full transition-colors ${isAddingTag ? 'bg-blue-100 text-blue-600' : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600'}`}
+                  title="タグを追加"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+                {isAddingTag && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsAddingTag(false)} />
+                    <div className="absolute top-full left-0 mt-2 z-50 bg-white border border-zinc-200 rounded-xl shadow-xl p-2 w-48 max-h-60 overflow-auto">
+                      <div className="px-1 pb-1 border-b border-zinc-100 mb-1">
+                        <input
+                          type="text"
+                          autoFocus
+                          placeholder="新規タグを入力..."
+                          className="w-full px-2 py-1.5 text-xs outline-none bg-zinc-50 border border-zinc-200 rounded focus:border-blue-500 transition-colors"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              addTag(e.currentTarget.value);
+                            }
+                          }}
+                        />
+                      </div>
+                      {allTags.filter(t => !(data.currentTags || []).includes(t)).length === 0 && (
+                        <div className="px-3 py-2 text-[10px] text-zinc-400 italic">既存のタグはありません</div>
+                      )}
+                      {allTags.filter(t => !(data.currentTags || []).includes(t)).map(tag => (
+                        <button
+                          key={tag}
+                          onClick={() => addTag(tag)}
+                          className="w-full text-left px-3 py-1.5 hover:bg-zinc-50 rounded-lg text-xs text-zinc-700 truncate"
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* タグによるクイック絞り込み（使用頻度順の横スクロールリスト） */}
           {data.type === "directory" && filteredPopularTags.length > 0 && (
             <div className="mt-3 flex items-center gap-3 overflow-x-auto pb-2 scroll-smooth no-scrollbar">
@@ -1381,15 +1494,20 @@ function PathExplorer() {
                     <p className="text-xs font-medium text-zinc-700 truncate group-hover:text-blue-600 transition-colors">
                       {item.name}
                     </p>
-                    {item.tags && item.tags.length > 0 && (
+                    {(item.tags && item.tags.length > 0 || item.parentTags && item.parentTags.length > 0) && (
                       <div className="flex flex-wrap gap-1 mt-1.5 opacity-80">
-                        {item.tags.slice(0, 2).map(tag => (
+                        {item.tags?.slice(0, 2).map(tag => (
                           <span key={tag} className="px-1.5 py-0.5 bg-zinc-100 text-zinc-500 text-[8px] rounded uppercase font-bold tracking-tight">
                             {tag}
                           </span>
                         ))}
-                        {item.tags.length > 2 && (
-                          <span className="text-[8px] text-zinc-400 font-medium">+{item.tags.length - 2}</span>
+                        {item.parentTags?.slice(0, 2 - (item.tags?.length || 0)).map(tag => (
+                          <span key={`parent-${tag}`} className="px-1.5 py-0.5 bg-zinc-100/70 text-zinc-400 text-[8px] rounded uppercase font-bold tracking-tight" title="親フォルダのタグ">
+                            {tag}
+                          </span>
+                        ))}
+                        {((item.tags?.length || 0) + (item.parentTags?.length || 0)) > 2 && (
+                          <span className="text-[8px] text-zinc-400 font-medium">+{((item.tags?.length || 0) + (item.parentTags?.length || 0)) - 2}</span>
                         )}
                       </div>
                     )}

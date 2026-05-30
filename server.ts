@@ -26,6 +26,21 @@ async function startServer() {
     }
   };
 
+  const getParentTags = (itemPath: string, metadata: any) => {
+    const parts = itemPath.split('/').filter(Boolean);
+    const tags = new Set<string>();
+    let current = '';
+    if (metadata['/']) metadata['/'].forEach((t: string) => tags.add(t));
+    
+    for (let i = 0; i < parts.length - 1; i++) {
+      current += '/' + parts[i];
+      if (metadata[current]) {
+        metadata[current].forEach((t: string) => tags.add(t));
+      }
+    }
+    return Array.from(tags);
+  };
+
   // メタデータの保存
   const saveMetadata = (data: any) => {
     metadataCache = data;
@@ -197,11 +212,16 @@ async function startServer() {
               }
             }
 
-            // フォルダの場合は、配下のパスに一致するタグを事前に集計したマップから取得
+            // フォルダの場合は、自身のタグと配下のパスに一致するタグを事前に集計したマップから取得してマージ
             if (item.isDirectory()) {
+              const ownTags = pathTagsMap[itemPath] || [];
+              const inheritedTags = Array.from(folderTagsMap[itemPath] || []);
+              const mergedTags = Array.from(new Set([...ownTags, ...inheritedTags]));
+              
               return {
                 ...itemBase,
-                tags: Array.from(folderTagsMap[itemPath] || []),
+                tags: mergedTags,
+                parentTags: getParentTags(itemPath, metadata),
                 folderPreviews,
                 hasSubDirectories
               };
@@ -209,12 +229,20 @@ async function startServer() {
               return {
                 ...itemBase,
                 tags: pathTagsMap[itemPath] || [],
+                parentTags: getParentTags(itemPath, metadata),
                 folderPreviews: [], // Files don't have folderPreviews
                 hasSubDirectories: false // Files don't have subdirectories
               };
             }
           });
-        res.json({ type: "directory", items: result, popularTags, prevPath, nextPath });
+        res.json({ 
+          type: "directory", 
+          items: result, 
+          popularTags, 
+          prevPath, 
+          nextPath,
+          currentTags: metadata[decodedSubPath] || []
+        });
       } else {
         res.json({ 
           type: "file", 
@@ -222,6 +250,7 @@ async function startServer() {
           path: decodedSubPath,
           isImage: /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fullPath),
           tags: metadata[decodedSubPath] || [],
+          parentTags: getParentTags(decodedSubPath, metadata),
           prevPath,
           nextPath
         });
@@ -483,8 +512,9 @@ async function startServer() {
     const { path: subPath, tags } = req.body;
     if (!subPath || !tags) return res.status(400).json({ error: "パスとタグが必要です" });
 
+    const decodedSubPath = decodeURIComponent(subPath);
     const metadata = getMetadata();
-    metadata[subPath] = tags;
+    metadata[decodedSubPath] = tags;
     saveMetadata(metadata);
 
     res.json({ message: "タグを更新しました" });

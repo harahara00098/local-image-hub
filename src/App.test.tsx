@@ -6,7 +6,7 @@ import App from './App';
 jest.mock('lucide-react', () => {
   return new Proxy({}, {
     get: function(target, prop) {
-      return () => <span data-testid={`icon-${prop}`}>{prop}</span>;
+      return () => <span data-testid={`icon-${String(prop)}`}>{String(prop)}</span>;
     }
   });
 });
