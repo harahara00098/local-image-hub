@@ -128,6 +128,7 @@ function PathExplorer() {
   const [error, setError] = useState<string | null>(null);
   const [direction, setDirection] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [slideshowRange, setSlideshowRange] = useState<{ start: string | number; end: string | number }>({ start: 1, end: 10 });
@@ -143,6 +144,7 @@ function PathExplorer() {
   const [isAddingTag, setIsAddingTag] = useState(false);
   const [isMovingFile, setIsMovingFile] = useState(false);
   const [allFoldersForMove, setAllFoldersForMove] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
   const [allTags, setAllTags] = useState<string[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [isBulkMoving, setIsBulkMoving] = useState(false);
@@ -268,22 +270,82 @@ function PathExplorer() {
     }
   }, [data?.type, sortedMediaItems.length, isPlaying]);
 
-  // 検索ワードに基づいて表示するタグボタンを絞り込む（選択中のタグは最優先表示）
+  // フィルタリング後のアイテムから、次に絞り込み可能なタグを抽出する
   const filteredPopularTags = useMemo(() => {
-    if (data?.type !== "directory" || !data.popularTags) return [];
+    if (data?.type !== "directory") return [];
 
-    const q = deferredSearchQuery.toLowerCase();
-    const targetTagsLower = deferredTagQuery.map(t => t.toLowerCase());
+    // 検索語句または選択タグによる絞り込みが行われている場合、現在の表示アイテムからタグを再集計する
+    if (deferredSearchQuery || deferredTagQuery.length > 0) {
+      const counts: Record<string, number> = {};
+      sortedItems.forEach(item => {
+        // 1つのアイテムに対して重複カウントしないよう Set を使用
+        const itemAllTags = new Set([...(item.tags || []), ...(item.parentTags || [])]);
+        itemAllTags.forEach(tag => {
+          if (tag) counts[tag] = (counts[tag] || 0) + 1;
+        });
+      });
 
-    let tags = data.popularTags;
-    if (q) {
-      tags = tags.filter(({ tag }) => tag.toLowerCase().includes(q));
+      const q = deferredSearchQuery.toLowerCase();
+      return Object.entries(counts)
+        .map(([tag, count]) => ({ tag, count }))
+        .filter(({ tag }) => !q || tag.toLowerCase().includes(q))
+        .sort((a, b) => (b.count || 0) - (a.count || 0) || a.tag.localeCompare(b.tag));
     }
 
-    return tags;
-  }, [data, deferredSearchQuery, deferredTagQuery]);
+    return data.popularTags || [];
+  }, [data, sortedItems, deferredSearchQuery, deferredTagQuery]);
 
   // スクロール位置の保存
+
+  const startSlideshow = useCallback(() => {
+    if (!data || data.type !== "directory") return;
+
+    const paths = sortedMediaItems.map(item => item.path);
+    if (paths.length === 0) return;
+
+    const startNum = parseInt(toHalfWidth(slideshowRange.start));
+    const endNum = parseInt(toHalfWidth(slideshowRange.end));
+    const intervalNum = parseInt(toHalfWidth(intervalSeconds));
+
+    if (isNaN(startNum) || isNaN(endNum) || isNaN(intervalNum)) {
+      alert("開始位置、終了位置、または秒数を数値で入力してください。");
+      return;
+    }
+
+    const maxItems = sortedMediaItems.length;
+    if (startNum < 1 || startNum > maxItems || endNum < 1 || endNum > maxItems) {
+      alert(`範囲は 1 から ${maxItems} の間で指定してください。`);
+      return;
+    }
+
+    if (startNum >= endNum) {
+      alert("終了位置は開始位置より後である必要があります。");
+      return;
+    }
+
+    setSlideshowPaths(paths);
+    setIsPlaying(true);
+    const startIdx = Math.max(0, Math.min(startNum - 1, paths.length - 1));
+    navigateTo(paths[startIdx], 1);
+  }, [data, sortedMediaItems, slideshowRange, intervalSeconds, navigateTo]);
+
+  const startSlideshowForSelected = useCallback(() => {
+    if (!data || data.type !== "directory") return;
+
+    const paths = sortedMediaItems
+      .filter(item => selectedPaths.has(item.path))
+      .map(item => item.path);
+
+    if (paths.length === 0) {
+      alert("スライドショー可能なメディアが選択されていません。");
+      return;
+    }
+
+    setSlideshowPaths(paths);
+    setIsPlaying(true);
+    navigateTo(paths[0], 1);
+  }, [data, sortedMediaItems, selectedPaths, navigateTo]);
+
   useEffect(() => {
     const handleScroll = () => {
       // 読み込み中は位置を上書きしない
@@ -320,17 +382,36 @@ function PathExplorer() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       if (e.key === "ArrowLeft" && data?.prevPath) {
-        setIsPlaying(false);
         navigateTo(data.prevPath, -1);
       } else if (e.key === "ArrowRight" && data?.nextPath) {
-        setIsPlaying(false);
         navigateTo(data.nextPath, 1);
+      } else if (e.key === "Escape") {
+        if (isZoomed) {
+          setIsZoomed(false);
+        } else if (data?.type === "file") {
+          const parentPath = currentPath.substring(0, currentPath.lastIndexOf("/")) || "/";
+          setIsPlaying(false);
+          navigate(parentPath);
+        }
+      } else if (e.key === " ") {
+        e.preventDefault();
+        if (data?.type === "directory") {
+          startSlideshow();
+        } else {
+          setIsPlaying(!isPlaying);
+        }
+      } else if (e.key === "/") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (e.key.toLowerCase() === "h") {
+        setIsPlaying(false);
+        navigate("/");
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [data, navigateTo]);
+  }, [data, navigateTo, isZoomed, currentPath, navigate, isPlaying, startSlideshow]);
 
   // ページが切り替わった際の状態リセット
   useEffect(() => {
@@ -339,6 +420,7 @@ function PathExplorer() {
     setIsAddingTag(false);
     setIsMovingFile(false);
     setIsAddingBulkTag(false);
+    setTagInput("");
     setSelectedPaths(new Set());
     if (!isPlaying) {
       setIsZoomed(false);
@@ -401,62 +483,6 @@ function PathExplorer() {
       }
     }
   }, [timeLeft, isPlaying, data, slideshowPaths, slideshowRange, navigateTo]);
-
-  const startSlideshow = () => {
-    if (!data || data.type !== "directory") return;
-
-    const paths = sortedMediaItems.map(item => item.path);
-    if (paths.length === 0) return;
-
-    // 実行時に全角を半角に変換して数値チェック（空文字などは NaN になる）
-    const startNum = parseInt(toHalfWidth(slideshowRange.start));
-    const endNum = parseInt(toHalfWidth(slideshowRange.end));
-    const intervalNum = parseInt(toHalfWidth(intervalSeconds));
-
-    if (isNaN(startNum) || isNaN(endNum) || isNaN(intervalNum)) {
-      alert("開始位置、終了位置、または秒数を数値で入力してください（空欄は不可です）。");
-      return;
-    }
-
-    const maxItems = sortedMediaItems.length;
-    if (startNum < 1 || startNum > maxItems) {
-      alert(`開始位置は 1 から ${maxItems} の範囲で入力してください。`);
-      return;
-    }
-
-    if (endNum < 1 || endNum > maxItems) {
-      alert(`終了位置は 1 から ${maxItems} の範囲で入力してください。`);
-      return;
-    }
-
-    if (startNum >= endNum) {
-      alert("終了位置は開始位置より後である必要があります。");
-      return;
-    }
-    
-
-    setSlideshowPaths(paths);
-    setIsPlaying(true);
-    const startIdx = Math.max(0, Math.min(startNum - 1, paths.length - 1));
-    navigateTo(paths[startIdx], 1);
-  };
-
-  const startSlideshowForSelected = () => {
-    if (!data || data.type !== "directory") return;
-
-    const paths = sortedMediaItems
-      .filter(item => selectedPaths.has(item.path))
-      .map(item => item.path);
-
-    if (paths.length === 0) {
-      alert("スライドショー可能なメディアが選択されていません。");
-      return;
-    }
-
-    setSlideshowPaths(paths);
-    setIsPlaying(true);
-    navigateTo(paths[0], 1);
-  };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -714,6 +740,7 @@ function PathExplorer() {
       if (!response.ok) throw new Error("一括タグ付けに失敗しました");
 
       setData(prev => {
+        setTagInput("");
         if (!prev || prev.type !== "directory") return prev;
         const updatedItems = prev.items.map(item => {
           if (selectedPaths.has(item.path)) {
@@ -745,6 +772,7 @@ function PathExplorer() {
       const response = await fetch("/api/all-tags");
       const tags = response.ok ? await response.json() : [];
       setAllTags(tags);
+      setTagInput("");
     } catch (err) {
       setAllTags([]);
     } finally {
@@ -814,6 +842,7 @@ function PathExplorer() {
           return { ...prev, currentTags: [...currentTags, newTag] };
         }
       });
+      setTagInput("");
       setIsAddingTag(false);
     } catch (err) {
       alert(err instanceof Error ? err.message : "タグの追加に失敗しました");
@@ -830,6 +859,7 @@ function PathExplorer() {
       const response = await fetch("/api/all-tags");
       const tags = response.ok ? await response.json() : [];
       setAllTags(tags);
+      setTagInput("");
     } catch (err) {
       setAllTags([]);
     } finally {
@@ -1099,17 +1129,19 @@ function PathExplorer() {
                             autoFocus
                             placeholder="新規タグを入力..."
                             className="w-full px-2 py-1.5 text-xs outline-none bg-zinc-50 border border-zinc-200 rounded focus:border-blue-500 transition-colors"
+                            value={tagInput}
+                            onChange={(e) => setTagInput(e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
-                                addTag(e.currentTarget.value);
+                                addTag(tagInput);
                               }
                             }}
                           />
                         </div>
-                        {allTags.filter(t => !(data.tags || []).includes(t)).length === 0 && (
+                        {allTags.filter(t => !(data.tags || []).includes(t) && t.toLowerCase().includes(tagInput.toLowerCase())).length === 0 && (
                           <div className="px-3 py-2 text-[10px] text-zinc-400 italic">既存のタグはありません</div>
                         )}
-                        {allTags.filter(t => !(data.tags || []).includes(t)).map(tag => (
+                        {allTags.filter(t => !(data.tags || []).includes(t) && t.toLowerCase().includes(tagInput.toLowerCase())).map(tag => (
                           <button
                             key={tag}
                             onClick={() => addTag(tag)}
@@ -1258,6 +1290,7 @@ function PathExplorer() {
                   <input
                     type="text"
                     placeholder="名前/タグ"
+                    ref={searchInputRef}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="bg-transparent outline-none w-20 sm:w-32 text-zinc-700 placeholder:text-zinc-400"
@@ -1385,17 +1418,19 @@ function PathExplorer() {
                             autoFocus
                             placeholder="新規タグを入力..."
                             className="w-full px-2 py-1.5 text-xs outline-none bg-zinc-50 border border-zinc-200 rounded focus:border-blue-500 transition-colors"
+                            value={tagInput}
+                            onChange={(e) => setTagInput(e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
-                                addTag(e.currentTarget.value);
+                                addTag(tagInput);
                               }
                             }}
                           />
                         </div>
-                        {allTags.filter(t => !(data.currentTags || []).includes(t)).length === 0 && (
+                        {allTags.filter(t => !(data.currentTags || []).includes(t) && t.toLowerCase().includes(tagInput.toLowerCase())).length === 0 && (
                           <div className="px-3 py-2 text-[10px] text-zinc-400 italic">既存のタグはありません</div>
                         )}
-                        {allTags.filter(t => !(data.currentTags || []).includes(t)).map(tag => (
+                        {allTags.filter(t => !(data.currentTags || []).includes(t) && t.toLowerCase().includes(tagInput.toLowerCase())).map(tag => (
                           <button
                             key={tag}
                             onClick={() => addTag(tag)}
@@ -1418,7 +1453,7 @@ function PathExplorer() {
                   <span className="text-[10px] font-bold uppercase tracking-wider">タグで絞り込み:</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  {filteredPopularTags.map(({ tag, count }) => (
+                  {filteredPopularTags.map(({ tag }) => (
                     <button
                       key={tag}
                       onClick={() => setTagQuery(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
@@ -1427,7 +1462,7 @@ function PathExplorer() {
                         : "bg-white border-zinc-200 text-zinc-600 hover:border-blue-300 hover:text-blue-600 active:scale-95"
                         }`}
                     >
-                      {tag}: {count}
+                      {tag}
                     </button>
                   ))}
                 </div>
@@ -1654,6 +1689,30 @@ function PathExplorer() {
                 </button>
               </div>
               <div className="p-6 md:p-10 overflow-auto">
+                <div className="mb-12">
+                  <h2 className="text-lg font-bold text-zinc-900 mb-4 flex items-center gap-2">
+                    <Check className="w-4 h-4 text-blue-600" />
+                    キーボードショートカット
+                  </h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {[
+                      { key: "← / →", desc: "前後のメディアへ移動" },
+                      { key: "Esc", desc: "拡大終了 / フォルダへ戻る" },
+                      { key: "Space", desc: "再生・一時停止 / 開始" },
+                      { key: "/", desc: "検索ボックスへ移動" },
+                      { key: "H", desc: "ホームへ戻る" },
+                    ].map((item) => (
+                      <div key={item.key} className="flex items-center justify-between p-2.5 bg-zinc-50 rounded-lg border border-zinc-100">
+                        <span className="text-zinc-600 text-xs font-medium">{item.desc}</span>
+                        <kbd className="px-2 py-0.5 bg-white border border-zinc-300 rounded shadow-sm text-[10px] font-mono font-bold text-zinc-800">
+                          {item.key}
+                        </kbd>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="h-px bg-zinc-200 mb-8" />
                 {readmeText ? <MarkdownContent content={readmeText} /> : <div className="flex justify-center py-20"><Loader2 className="animate-spin text-zinc-300" /></div>}
               </div>
               <div className="p-4 border-t border-zinc-50 bg-zinc-50 flex justify-end">
@@ -1757,18 +1816,19 @@ function PathExplorer() {
                         autoFocus
                         placeholder="一括タグ追加..."
                         className="w-full px-2 py-1.5 text-xs outline-none bg-zinc-50 border border-zinc-200 rounded focus:border-blue-500 transition-colors text-zinc-900"
+                        value={tagInput}
+                        onChange={(e) => setTagInput(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
-                            performBulkTag(e.currentTarget.value);
-                            e.currentTarget.value = "";
+                            performBulkTag(tagInput);
                           }
                         }}
                       />
                     </div>
-                    {allTags.length === 0 && (
+                    {allTags.filter(t => t.toLowerCase().includes(tagInput.toLowerCase())).length === 0 && (
                       <div className="px-3 py-2 text-[10px] text-zinc-400 italic">既存のタグはありません</div>
                     )}
-                    {allTags.map(tag => (
+                    {allTags.filter(t => t.toLowerCase().includes(tagInput.toLowerCase())).map(tag => (
                       <button
                         key={tag}
                         onClick={() => performBulkTag(tag)}

@@ -143,18 +143,24 @@ describe('App', () => {
     window.history.pushState({}, '', '/');
     render(<App />);
     await waitFor(() => {
-      expect(screen.getByText('image1.jpg')).toBeInTheDocument();
-    });
-
-    const tag1Button = screen.getByRole('button', { name: /tag1:/ });
-    fireEvent.click(tag1Button);
-    await waitFor(() => {
       expect(screen.queryByText(/フォルダを読み込み中/i)).not.toBeInTheDocument();
     });
+    
+    expect(screen.getByText('image1.jpg')).toBeInTheDocument();
 
-    const tag2Button = screen.getByRole('button', { name: /tag2:/ });
+    // タグボタンが表示されるのを待つ
+    const tag1Button = await screen.findByRole('button', { name: /^tag1$/ });
+    fireEvent.click(tag1Button);
+
+    // APIリクエストと再レンダリングを待つ
+    await waitFor(() => {
+      expect(screen.getByText('image2.jpg')).toBeInTheDocument();
+    });
+
+    const tag2Button = await screen.findByRole('button', { name: /^tag2$/ });
     fireEvent.click(tag2Button);
 
+    // AND検索の結果、image2が消えてimage1だけが残るのを待つ
     await waitFor(() => {
       expect(screen.getByText('image1.jpg')).toBeInTheDocument();
       expect(screen.queryByText('image2.jpg')).not.toBeInTheDocument();
@@ -179,7 +185,7 @@ describe('App - Isolation Test', () => {
     expect(screen.getByText('image1.jpg')).toBeInTheDocument();
 
     // 前のテストの選択状態（tag1）が残っている場合はクリックして解除
-    const activeTag1Button = screen.queryByRole('button', { name: /tag1:/ });
+    const activeTag1Button = screen.queryByRole('button', { name: /^tag1$/ });
     if (activeTag1Button && activeTag1Button.className.includes('bg-blue-600')) {
       fireEvent.click(activeTag1Button);
       await waitFor(() => {
@@ -187,7 +193,7 @@ describe('App - Isolation Test', () => {
       });
     }
 
-    const tag2Button = screen.getByRole('button', { name: /tag2:/ });
+    const tag2Button = screen.getByRole('button', { name: /^tag2$/ });
     fireEvent.click(tag2Button);
 
     await waitFor(() => {
