@@ -115,22 +115,6 @@ async function startServer() {
     const decodedDir = decodeURIComponent(currentDir);
     const metadata = getMetadata();
 
-    // 現在のディレクトリ配下の実ファイルを再帰的に取得
-    const currentDirPhysical = path.join(IMAGES_DIR, decodedDir.replace(/^\//, ''));
-    const allFiles = getAllFiles(currentDirPhysical, IMAGES_DIR);
-
-    // ヘッダー表示用のタグ集計
-    const dirPrefix = decodedDir === '/' ? '/' : decodedDir + '/';
-    const allTagCounts: Record<string, number> = {};
-
-    for (const [key, tags] of Object.entries(metadata)) {
-      if (!Array.isArray(tags)) continue;
-      const normKey = key.startsWith('/') ? key : '/' + key;
-      if (decodedDir === '/' || normKey.startsWith(dirPrefix) || normKey === decodedDir) {
-        tags.forEach(t => { allTagCounts[t] = (allTagCounts[t] || 0) + 1; });
-      }
-    }
-
     // 再帰的に親フォルダの継承タグを取得する内部ヘルパー関数
     const getParentTagsLocal = (itemPath: string) => {
       const parts = itemPath.split('/').filter(Boolean);
@@ -146,6 +130,10 @@ async function startServer() {
     };
 
     const finalItems = [];
+
+    // 現在のディレクトリ配下の実ファイルを再帰的に取得
+    const currentDirPhysical = path.join(IMAGES_DIR, decodedDir.replace(/^\//, ''));
+    const allFiles = getAllFiles(currentDirPhysical, IMAGES_DIR);
 
     // 実ファイルのタグ情報を走査し、ターゲットタグを満たすか判定（AND検索）
     for (const itemPath of allFiles) {
@@ -172,6 +160,15 @@ async function startServer() {
         });
       }
     }
+
+    // 抽出されたアイテムから、関連するタグのみを再集計する
+    const allTagCounts: Record<string, number> = {};
+    finalItems.forEach(item => {
+      const itemAllTags = new Set([...(item.tags || []), ...(item.parentTags || [])]);
+      itemAllTags.forEach(t => {
+        if (t) allTagCounts[t] = (allTagCounts[t] || 0) + 1;
+      });
+    });
 
     const popularTags = Object.entries(allTagCounts)
       .sort((a, b) => b[1] - a[1])
