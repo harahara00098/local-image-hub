@@ -1163,6 +1163,7 @@ function PathExplorer() {
                   src={`/raw-images${data.path}`}
                   controls
                   autoPlay
+                  loop={!isPlaying}
                   onEnded={() => {
                     if (isPlaying) setTimeLeft(0);
                   }}
@@ -1884,7 +1885,7 @@ function PathExplorer() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/95 overflow-auto flex items-start justify-center p-4 md:p-12 cursor-zoom-out"
+            className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4 md:p-12 cursor-zoom-out"
             onClick={() => setIsZoomed(false)}
           >
             <button
@@ -1896,7 +1897,7 @@ function PathExplorer() {
             <img
               src={`/raw-images${data.path}`}
               alt={data.name}
-              className="max-w-none shadow-2xl"
+              className="max-w-full max-h-full object-contain shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             />
           </motion.div>
