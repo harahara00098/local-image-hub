@@ -1126,7 +1126,7 @@ function PathExplorer() {
               </div>
             </div>
 
-            {data.isImage && (
+            {(data.isImage || isVideo) && (
               <div className="px-4 pb-4 flex flex-wrap gap-2 items-center border-b border-zinc-100">
                 <Tag className="w-3.5 h-3.5 text-zinc-400" />
                 {data.tags?.map(tag => (
