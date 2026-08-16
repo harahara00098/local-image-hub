@@ -275,6 +275,8 @@ async function startServer() {
             const relativePath = path.join(decodedSubPath, item.name).replace(/\\/g, '/');
             const itemPath = relativePath.startsWith('/') ? relativePath : '/' + relativePath;
 
+            const isVideo = /\.(mp4|mov|webm|mkv)$/i.test(item.name);
+
             const itemBase = {
               name: item.name,
               isDirectory: item.isDirectory(),
@@ -282,26 +284,50 @@ async function startServer() {
               isImage: /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(item.name),
             };
 
+            // フォルダプレビューを再帰的に取得するヘルパー関数
+            const getPreviewsRecursive = (currentDir: string, currentRelativePath: string, limit: number): string[] => {
+              let foundPreviews: string[] = [];
+              try {
+                const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+                // 1. 直下の画像を探す
+                for (const entry of entries) {
+                  if (!entry.isDirectory()) {
+                    const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(entry.name);
+                    const isVideo = /\.(mp4|mov|webm|mkv)$/i.test(entry.name);
+                    if (!isImage && !isVideo) continue;
+
+                    const p = path.join(currentRelativePath, entry.name).replace(/\\/g, '/');
+                    const previewPath = p.startsWith('/') ? p : '/' + p;
+                    if (isVideo) {
+                      // 動画の場合は、フロントエンドが判別できるよう 'video:' プレフィックスを付与する
+                      foundPreviews.push(`video:${previewPath}`);
+                    } else {
+                      foundPreviews.push(previewPath);
+                    }
+                    if (foundPreviews.length >= limit) return foundPreviews;
+                  }
+                }
+                // 2. サブフォルダを再帰的に探す
+                for (const entry of entries) {
+                  if (entry.isDirectory() && !entry.name.startsWith('.')) {
+                    const remaining = limit - foundPreviews.length;
+                    if (remaining > 0) {
+                      const nestedPreviews = getPreviewsRecursive(path.join(currentDir, entry.name), path.join(currentRelativePath, entry.name), remaining);
+                      foundPreviews = foundPreviews.concat(nestedPreviews);
+                      if (foundPreviews.length >= limit) return foundPreviews.slice(0, limit);
+                    }
+                  }
+                }
+              } catch (e) { /* アクセス権限エラー等は無視 */ }
+              return foundPreviews;
+            };
+
             let folderPreviews: string[] = [];
             let hasSubDirectories = false;
 
             if (item.isDirectory()) {
-              try {
-                const subItems = fs.readdirSync(path.join(fullPath, item.name), { withFileTypes: true });
-                // フォルダ内のプレビュー用画像を取得 (最大4枚)
-                const images = subItems
-                  .filter(si => !si.isDirectory() && /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(si.name))
-                  .slice(0, 4);
-
-                folderPreviews = images.map(img => {
-                  const p = path.join(itemPath, img.name).replace(/\\/g, '/');
-                  return p.startsWith('/') ? p : '/' + p;
-                });
-
-                hasSubDirectories = subItems.some(si => si.isDirectory() && !si.name.startsWith('.'));
-              } catch (e) {
-                // アクセス権限エラー等はスキップ
-              }
+              folderPreviews = getPreviewsRecursive(path.join(fullPath, item.name), itemPath, 4);
+              hasSubDirectories = fs.readdirSync(path.join(fullPath, item.name), { withFileTypes: true }).some(si => si.isDirectory() && !si.name.startsWith('.'));
             }
 
             if (item.isDirectory()) {
