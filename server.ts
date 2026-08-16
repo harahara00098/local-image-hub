@@ -139,7 +139,8 @@ async function startServer() {
     for (const itemPath of allFiles) {
       const filename = path.basename(itemPath);
       const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(filename);
-      if (!isImage) continue;
+      const isVideo = /\.(mp4|mov|webm|mkv)$/i.test(filename);
+      if (!isImage && !isVideo) continue;
 
       const ownTags = metadata[itemPath] || metadata[itemPath.replace(/^\//, '')] || [];
       const parentTags = getParentTagsLocal(itemPath);
