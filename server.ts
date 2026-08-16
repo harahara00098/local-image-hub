@@ -397,8 +397,8 @@ async function startServer() {
     res.sendFile(path.join(process.cwd(), "README.md"));
   });
 
-  // ファイル/フォルダの名前変更API
-  app.post("/api/rename", (req, res) => {
+  // ファイルの名前変更API
+  app.post("/api/renameFile", (req, res) => {
     const { path: subPath, newName } = req.body;
     if (!subPath || !newName) return res.status(400).json({ error: "パスと新しい名前が必要です" });
 
@@ -434,6 +434,66 @@ async function startServer() {
 
       res.json({ message: "名前を変更しました" });
     } catch (err) {
+      res.status(500).json({ error: "名前の変更に失敗しました" });
+    }
+  });
+
+  // フォルダの名前変更API
+  app.post("/api/renameFolder", (req, res) => {
+    const { path: subPath, newName } = req.body;
+    if (!subPath || !newName) return res.status(400).json({ error: "パスと新しい名前が必要です" });
+
+    const decodedSubPath = decodeURIComponent(subPath);
+    const oldFullPath = path.join(IMAGES_DIR, decodedSubPath);
+    const newFullPath = path.join(path.dirname(oldFullPath), newName);
+
+    if (!fs.existsSync(oldFullPath)) return res.status(404).json({ error: "ファイルが見つかりません" });
+
+    try {
+      // fs.renameSync は EPERM エラーを引き起こす可能性があるため、
+      // 新しいディレクトリを作成し、内容を移動してから古いディレクトリを削除する方法に切り替えます。
+      if (fs.existsSync(newFullPath)) {
+        return res.status(400).json({ error: "同じ名前のフォルダが既に存在します。" });
+      }
+
+      // 1. 新しい名前でフォルダを作成
+      fs.mkdirSync(newFullPath, { recursive: true });
+
+      // 2. 古いフォルダから新しいフォルダへ中身を移動
+      const items = fs.readdirSync(oldFullPath);
+      for (const item of items) {
+        const oldItemPath = path.join(oldFullPath, item);
+        const newItemPath = path.join(newFullPath, item);
+        fs.renameSync(oldItemPath, newItemPath);
+      }
+
+      // 3. 空になった古いフォルダを削除
+      fs.rmdirSync(oldFullPath);
+
+      // 変更に合わせてメタデータ内の該当パスキーを一括更新
+      const metadata = getMetadata();
+      const newSubPath = path.join(path.dirname(decodedSubPath), newName).replace(/\\/g, '/');
+      const fixedNewSubPath = newSubPath.startsWith('/') || newSubPath === '' ? newSubPath : '/' + newSubPath;
+
+      const oldPrefix = decodedSubPath.endsWith('/') ? decodedSubPath : decodedSubPath + '/';
+      const newPrefix = fixedNewSubPath.endsWith('/') ? fixedNewSubPath : fixedNewSubPath + '/';
+
+      const updatedMetadata: any = {};
+      Object.keys(metadata).forEach(key => {
+        if (key === decodedSubPath) {
+          updatedMetadata[fixedNewSubPath] = metadata[key];
+        } else if (key.startsWith(oldPrefix) && oldPrefix !== '/') {
+          const newKey = fixedNewSubPath + key.substring(decodedSubPath.length);
+          updatedMetadata[newKey] = metadata[key];
+        } else {
+          updatedMetadata[key] = metadata[key];
+        }
+      });
+      saveMetadata(updatedMetadata);
+
+      res.json({ message: "名前を変更しました" });
+    } catch (err) {
+      console.error("[ERROR] Rename folder failed:", err);
       res.status(500).json({ error: "名前の変更に失敗しました" });
     }
   });

@@ -9,6 +9,7 @@ interface Item {
   path: string;
   isImage: boolean;
   tags?: string[];
+  items?: Item[]; // for group view
   parentTags?: string[];
   folderPreviews?: string[];
   hasSubDirectories?: boolean;
@@ -169,7 +170,10 @@ function PathExplorer() {
       const isFile = /\.(jpg|jpeg|png|gif|webp|svg|mp4|webm|ogg|mov)$/i.test(currentPath);
 
       // タグが選択されており、かつフォルダを開こうとしている場合のみタグ検索APIを使用
-      if (tagQuery.length > 0 && !isFile) {
+      if (currentPath.startsWith('/group-view/')) {
+        const groupPath = currentPath.replace('/group-view', '');
+        url = `/api/browse${groupPath}?recursive=true`;
+      } else if (tagQuery.length > 0 && !isFile) {
         const tagsParam = encodeURIComponent(tagQuery.join(","));
         url = `/api/search-by-tag?tag=${tagsParam}&dir=${encodeURIComponent(currentPath)}`;
       }
@@ -241,6 +245,44 @@ function PathExplorer() {
 
         return targetTagsLower.every(tq => itemAllTagsLower.includes(tq));
       });
+    }
+
+    // タグ検索結果をグループ化する
+    if (deferredTagQuery.length > 0) {
+      const groups = new Map<string, Item[]>();
+      const nonGroupedItems: Item[] = [];
+
+      filtered.forEach(item => {
+        const pathParts = item.path.split('/').filter(Boolean);
+        // 孫フォルダ (例: /comics/one-piece-vol1) をグループ単位とする
+        if (pathParts.length > 2) {
+          const groupPath = `/${pathParts.slice(0, 2).join('/')}`;
+          if (!groups.has(groupPath)) {
+            groups.set(groupPath, []);
+          }
+          groups.get(groupPath)?.push(item);
+        } else {
+          // グループ化の対象外のアイテムはそのまま保持
+          nonGroupedItems.push(item);
+        }
+      });
+
+      const groupedItems: Item[] = Array.from(groups.entries()).map(([groupPath, items]) => {
+        const firstItem = items[0];
+        return {
+          name: groupPath.split('/').pop() || groupPath,
+          path: groupPath,
+          isDirectory: true,
+          isImage: false, // グループなので画像ではない
+          folderPreviews: items.slice(0, 4).map(i => i.path),
+          hasSubDirectories: false, // グループ内のサブディレクトリは考慮しない
+          // グループ内のアイテムが持つタグを集約して表示用にセット
+          tags: [...new Set(items.flatMap(i => i.tags || []))].slice(0, 2),
+          parentTags: [...new Set(items.flatMap(i => i.parentTags || []))].slice(0, 2 - (firstItem.tags?.length || 0)),
+        };
+      });
+      // グループ化されたアイテムと、されなかったアイテムを結合
+      filtered = [...groupedItems, ...nonGroupedItems];
     }
 
     // ソート用の比較値を事前計算してキャッシュ
@@ -325,6 +367,7 @@ function PathExplorer() {
 
     setSlideshowPaths(paths);
     setIsPlaying(true);
+    setIsZoomed(true);
     const startIdx = Math.max(0, Math.min(startNum - 1, paths.length - 1));
     navigateTo(paths[startIdx], 1);
   }, [data, sortedMediaItems, slideshowRange, intervalSeconds, navigateTo]);
@@ -343,6 +386,7 @@ function PathExplorer() {
 
     setSlideshowPaths(paths);
     setIsPlaying(true);
+    setIsZoomed(true);
     navigateTo(paths[0], 1);
   }, [data, sortedMediaItems, selectedPaths, navigateTo]);
 
@@ -518,6 +562,23 @@ function PathExplorer() {
     }
   };
 
+  // location.state経由でスライドショーが開始された場合の処理
+  useEffect(() => {
+    const slideshowFromState = location.state?.slideshow;
+    if (slideshowFromState) {
+      setSlideshowPaths(slideshowFromState.paths);
+      setIntervalSeconds(slideshowFromState.interval);
+      setSlideshowRange(slideshowFromState.range);
+      setIsPlaying(true);
+      setIsZoomed(true);
+      navigateTo(slideshowFromState.paths[0], 1);
+      // 状態を消費したのでクリアする
+      // navigateTo を使うと direction がセットされてしまうので、ここでは navigate を直接使う
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
+
   const handleRenameDirectory = async () => {
     if (!data || data.type !== "directory" || currentPath === "/") return;
 
@@ -526,7 +587,7 @@ function PathExplorer() {
     if (!newName || newName.trim() === "" || newName === dirName) return;
 
     try {
-      const response = await fetch("/api/rename", {
+      const response = await fetch("/api/renameFolder", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -787,7 +848,7 @@ function PathExplorer() {
     if (!newName || newName.trim() === "" || newName === data.name) return;
 
     try {
-      const response = await fetch("/api/rename", {
+      const response = await fetch("/api/renameFile", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1199,6 +1260,7 @@ function PathExplorer() {
     }
 
     const mediaItems = sortedMediaItems;
+    const depth = currentPath.split('/').filter(Boolean).length;
 
     return (
       <div
@@ -1284,6 +1346,16 @@ function PathExplorer() {
                 </button>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
+                {depth === 2 && (
+                  <button
+                    onClick={() => navigate(`/group-view${currentPath}`)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold rounded-lg transition-colors"
+                    title="フォルダ内の全画像を一覧表示します"
+                  >
+                    <Maximize2 className="w-4 h-4" />
+                    一覧表示
+                  </button>
+                )}
                 <button
                   className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-lg text-sm group focus-within:border-blue-500 focus-within:bg-white transition-all"
                 >
@@ -1297,13 +1369,15 @@ function PathExplorer() {
                     className="bg-transparent outline-none w-20 sm:w-32 text-zinc-700 placeholder:text-zinc-400"
                   />
                 </button>
-                <button
-                  onClick={handleCreateDirectory}
-                  className="p-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-lg transition-colors border border-zinc-200"
-                  title="新しいフォルダを作成"
-                >
-                  <FolderPlus className="w-5 h-5" />
-                </button>
+                {depth < 2 && (
+                  <button
+                    onClick={handleCreateDirectory}
+                    className="p-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-lg transition-colors border border-zinc-200"
+                    title="新しいフォルダを作成"
+                  >
+                    <FolderPlus className="w-5 h-5" />
+                  </button>
+                )}
                 {currentPath !== "/" && (
                   <button
                     onClick={handleRenameDirectory}
@@ -1506,6 +1580,8 @@ function PathExplorer() {
                 ? mediaItems.findIndex(mi => mi.path === item.path) + 1
                 : null;
               const isSelected = selectedPaths.has(item.path);
+              // 孫フォルダ以降をグループとして扱う
+              const isGroup = item.isDirectory && item.path.split('/').filter(Boolean).length > 1;
 
               return (
                 <motion.div
@@ -1526,9 +1602,9 @@ function PathExplorer() {
                   <Link
                     onClick={(e) => {
                       if (selectedPaths.size > 0) toggleSelection(e, item.path);
-                      if (item.isDirectory) { setSearchQuery(""); setTagQuery([]);; }
+                      if (item.isDirectory && !isGroup) { setSearchQuery(""); setTagQuery([]);; }
                     }}
-                    to={selectedPaths.size > 0 ? "" : item.path}
+                    to={selectedPaths.size > 0 ? "" : (isGroup ? `/group-view${item.path}` : item.path)}
                     className="block bg-white border border-zinc-200 rounded-xl overflow-hidden hover:shadow-md hover:border-blue-200 transition-all h-full"
                   >
                     <div className="aspect-square bg-zinc-50 flex items-center justify-center relative overflow-hidden group-hover:bg-blue-50/50 transition-colors">
@@ -1537,7 +1613,7 @@ function PathExplorer() {
                           {mediaIndex}
                         </div>
                       )}
-                      {item.isDirectory ? (
+                      {item.isDirectory && (isGroup || item.folderPreviews) ? (
                         <div className="w-full h-full flex items-center justify-center relative">
                           {item.folderPreviews && item.folderPreviews.length > 0 ? (
                             <>
@@ -1558,13 +1634,15 @@ function PathExplorer() {
                                 {item.hasSubDirectories ? <Folders className="w-3.5 h-3.5 text-zinc-600" /> : <Folder className="w-3.5 h-3.5 text-zinc-600" />}
                               </div>
                             </>
-                          ) : (
+                          ) : isGroup ? (
+                            <Folders className="w-12 h-12 text-zinc-300 group-hover:text-blue-400 group-hover:scale-110 transition-all duration-300" />
+                          ) : ( // 通常のフォルダ
                             item.hasSubDirectories ? (
                               <Folders className="w-12 h-12 text-zinc-300 group-hover:text-blue-400 group-hover:scale-110 transition-all duration-300" />
                             ) : (
                               <Folder className="w-12 h-12 text-zinc-300 group-hover:text-blue-400 group-hover:scale-110 transition-all duration-300" />
                             )
-                          )}
+                          ) }
                         </div>
                       ) : isVideo ? (
                         <div className="relative w-full h-full bg-black flex items-center justify-center">
@@ -1587,6 +1665,8 @@ function PathExplorer() {
                             (e.target as HTMLImageElement).src = 'https://placehold.co/400?text=No+Preview';
                           }}
                         />
+                      ) : item.isDirectory ? ( // プレビューがないフォルダ
+                        <Folder className="w-12 h-12 text-zinc-300 group-hover:text-blue-400 group-hover:scale-110 transition-all duration-300" />
                       ) : (
                         <FileImage className="w-10 h-10 text-zinc-200" />
                       )}
@@ -1907,13 +1987,323 @@ function PathExplorer() {
   );
 }
 
+function GroupView() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [data, setData] = useState<DirectoryResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [intervalSeconds, setIntervalSeconds] = useState<string | number>(3);
+  const [isAddingTag, setIsAddingTag] = useState(false);
+  const [addingTagToPath, setAddingTagToPath] = useState<string | null>(null);
+  const [tagInput, setTagInput] = useState("");
+  const [allTags, setAllTags] = useState<string[]>([]);
+
+  const groupPath = location.pathname.replace('/group-view', '');
+
+  useEffect(() => {
+    const loadGroupContent = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const url = `/api/browse${groupPath}?recursive=true`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("グループデータの取得に失敗しました");
+        const json = await response.json();
+        setData(json);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadGroupContent();
+  }, [groupPath]);
+
+  const handleAddTag = async (path: string) => {
+    if (isAddingTag && addingTagToPath === path) {
+      setIsAddingTag(false);
+      setAddingTagToPath(null);
+      return;
+    }
+    try {
+      const response = await fetch("/api/all-tags");
+      const tags = response.ok ? await response.json() : [];
+      setAllTags(tags);
+      setTagInput("");
+    } catch (err) {
+      setAllTags([]);
+    } finally {
+      setIsAddingTag(true);
+      setAddingTagToPath(path);
+    }
+  };
+
+  const addTag = async (tagName: string, path: string) => {
+    const newTag = tagName.trim();
+    if (newTag === "") return;
+
+    const item = data?.items?.find(i => i.path === path);
+    if (!item) return;
+
+    const currentTags = item.tags || [];
+    if (currentTags.some(t => t.toLowerCase() === newTag.toLowerCase())) {
+      alert("そのタグは既に存在します。");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: path, tags: [...currentTags, newTag] }),
+      });
+      if (!response.ok) throw new Error("タグの更新に失敗しました");
+
+      setData(prev => {
+        if (!prev) return prev;
+        const newItems = prev.items.map(i => {
+          if (i.path === path) {
+            return { ...i, tags: [...(i.tags || []), newTag] };
+          }
+          return i;
+        });
+        return { ...prev, items: newItems };
+      });
+      setTagInput("");
+      setIsAddingTag(false);
+      setAddingTagToPath(null);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "タグの追加に失敗しました");
+    }
+  };
+
+  const handleRemoveTag = async (tagToRemove: string, path: string) => {
+    if (!confirm(`タグ "${tagToRemove}" を削除しますか？`)) return;
+
+    const item = data?.items?.find(i => i.path === path);
+    if (!item) return;
+
+    const newTags = (item.tags || []).filter(t => t !== tagToRemove);
+
+    try {
+      const response = await fetch("/api/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: path, tags: newTags }),
+      });
+      if (!response.ok) throw new Error("タグの削除に失敗しました");
+
+      setData(prev => {
+        if (!prev) return prev;
+        const newItems = prev.items.map(i => {
+          if (i.path === path) return { ...i, tags: newTags };
+          return i;
+        });
+        return { ...prev, items: newItems };
+      });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "タグの削除に失敗しました");
+    }
+  };
+
+  const startSlideshow = () => {
+    if (!data || !data.items) return;
+    const mediaItems = data.items.filter(item => item.isImage || isVideoFile(item.name));
+    if (mediaItems.length === 0) return;
+
+    const paths = mediaItems.map(item => item.path);
+    const interval = parseInt(toHalfWidth(intervalSeconds), 10);
+
+    // PathExplorerにスライドショーの状態を渡して開始
+    navigate(paths[0], {
+      state: {
+        slideshow: {
+          paths: paths,
+          interval: isNaN(interval) ? 3 : interval,
+          range: { start: 1, end: paths.length }
+        }
+      }
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh]">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+        <p className="mt-4 text-zinc-500 font-medium">グループを読み込み中...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] p-8 text-center">
+        <div className="bg-red-50 text-red-600 p-4 rounded-xl max-w-md">
+          <p className="font-semibold">エラーが発生しました</p>
+          <p className="text-sm mt-1">{error}</p>
+          <button onClick={() => navigate("/")} className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg transition-colors hover:bg-red-700">トップへ戻る</button>
+        </div>
+      </div>
+    );
+  }
+
+  const parentPath = groupPath.substring(0, groupPath.lastIndexOf('/')) || '/';
+
+  return (
+    <div className="bg-zinc-800 min-h-screen text-white">
+      <div className="sticky top-0 z-30 bg-zinc-900/80 backdrop-blur-md border-b border-white/10 shadow-lg p-4">
+        <div className="max-w-5xl mx-auto flex items-center justify-between">
+          <div className="flex-1">
+            <button
+              onClick={() => navigate(parentPath)}
+              className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors group"
+            >
+              <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
+              フォルダに戻る
+            </button>
+            <h1 className="text-xl font-bold mt-1 truncate">{decodeURIComponent(groupPath.split('/').pop() || '')}</h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate(groupPath)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-xs font-bold rounded-lg transition-colors"
+              title="通常のフォルダ表示に戻ります"
+            >
+              <Minimize2 className="w-4 h-4" />
+              フォルダとして表示
+            </button>
+
+            <div className="flex items-center gap-2 bg-zinc-800/50 border border-zinc-700 rounded-lg p-1">
+            <div className="flex items-center gap-1.5 px-2 border-r border-zinc-700">
+              <span className="text-[10px] uppercase font-bold text-zinc-400">秒</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={intervalSeconds}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '' || /^[0-9０-９]+$/.test(val)) {
+                    setIntervalSeconds(val);
+                  }
+                }}
+                className="w-10 text-center text-xs font-semibold bg-zinc-900 border border-zinc-700 rounded outline-none focus:border-blue-500 py-0.5"
+                title="スライドショーの間隔（秒）"
+              />
+            </div>
+            <button
+              onClick={startSlideshow}
+              className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded transition-colors"
+              title="スライドショーを開始"
+            >
+              <Play className="w-3 h-3 fill-current" />
+              スライドショー
+            </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-5xl mx-auto p-4 md:p-8 space-y-8">
+        {data?.items?.filter(item => item.isImage || isVideoFile(item.name)).map(item => (
+          <div key={item.path} className="bg-zinc-900 rounded-xl overflow-hidden border border-zinc-700 shadow-2xl">
+            <div className="p-3 border-b border-zinc-800">
+              <p className="text-sm font-medium text-zinc-300 truncate">{item.name}</p>
+            </div>
+            {(item.tags && item.tags.length > 0 || item.parentTags && item.parentTags.length > 0) && (
+              <div className="p-3 border-b border-zinc-800 flex flex-wrap gap-2 items-center relative">
+                <Tag className="w-3.5 h-3.5 text-zinc-400" />
+                {item.tags?.map(tag => (
+                  <div key={tag} className="flex items-center gap-1 pl-2 pr-1 py-0.5 bg-blue-600/50 text-blue-200 text-[10px] font-bold rounded-full">
+                    <span>{tag}</span>
+                    <button
+                      onClick={() => handleRemoveTag(tag, item.path)}
+                      className="p-0.5 hover:text-red-400 transition-colors border-l border-blue-400/50 ml-1 pl-1"
+                      title="タグを削除"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                ))}
+                {item.parentTags?.map(tag => (
+                  <span key={`parent-${tag}`} className="px-2 py-0.5 bg-zinc-700/80 text-zinc-400 text-[10px] font-bold rounded-full" title="親フォルダから継承されたタグ">
+                    {tag}
+                  </span>
+                ))}
+                <div className="relative">
+                  <button
+                    onClick={() => handleAddTag(item.path)}
+                    className={`p-1 rounded-full transition-colors ${isAddingTag && addingTagToPath === item.path ? 'bg-blue-100/20 text-blue-300' : 'text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'}`}
+                    title="タグを追加"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                  {isAddingTag && addingTagToPath === item.path && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => { setIsAddingTag(false); setAddingTagToPath(null); }} />
+                      <div className="absolute top-full left-0 mt-2 z-50 bg-zinc-800 border border-zinc-700 rounded-xl shadow-xl p-2 w-48 max-h-60 overflow-auto">
+                        <div className="px-1 pb-1 border-b border-zinc-700 mb-1">
+                          <input
+                            type="text"
+                            autoFocus
+                            placeholder="新規タグを入力..."
+                            className="w-full px-2 py-1.5 text-xs outline-none bg-zinc-900 border border-zinc-700 rounded focus:border-blue-500 transition-colors text-zinc-200"
+                            value={tagInput}
+                            onChange={(e) => setTagInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                addTag(tagInput, item.path);
+                              }
+                            }}
+                          />
+                        </div>
+                        {allTags.filter(t => !(item.tags || []).includes(t) && t.toLowerCase().includes(tagInput.toLowerCase())).length === 0 && (
+                          <div className="px-3 py-2 text-[10px] text-zinc-500 italic">既存のタグはありません</div>
+                        )}
+                        {allTags.filter(t => !(item.tags || []).includes(t) && t.toLowerCase().includes(tagInput.toLowerCase())).map(tag => (
+                          <button
+                            key={tag}
+                            onClick={() => addTag(tag, item.path)}
+                            className="w-full text-left px-3 py-1.5 hover:bg-zinc-700 rounded-lg text-xs text-zinc-300 truncate"
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="bg-black flex items-center justify-center">
+              {isVideoFile(item.name) ? (
+                <video src={`/raw-images${item.path}`} controls className="max-w-full max-h-[90vh]" />
+              ) : (
+                <img src={`/raw-images${item.path}`} alt={item.name} className="max-w-full max-h-[90vh] object-contain" />
+              )}
+            </div>
+          </div>
+        ))}
+        {data?.items?.length === 0 && (
+          <div className="text-center py-20 text-zinc-500">
+            <p>このグループには表示できるアイテムがありません。</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
 
   return (
     <BrowserRouter>
       <div className="min-h-screen">
         <Routes>
-          <Route path="*" element={
+          <Route path="/group-view/*" element={
+            <ErrorBoundary><GroupView /></ErrorBoundary>
+          } />
+          <Route path="/*" element={
             <ErrorBoundary><PathExplorer /></ErrorBoundary>
           } />
         </Routes>
