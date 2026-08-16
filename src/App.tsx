@@ -1619,16 +1619,26 @@ function PathExplorer() {
                             <>
                               <div className={`grid w-full h-full pointer-events-none transition-transform duration-500 group-hover:scale-110 ${item.folderPreviews.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
                                 } ${item.folderPreviews.length > 2 ? 'grid-rows-2' : ''}`}>
-                                {item.folderPreviews.map((previewPath, i) => (
-                                  <img
-                                    key={i}
-                                    src={`/raw-images${previewPath}`}
-                                    alt=""
-                                    loading="lazy"
-                                    className={`w-full h-full object-cover ${item.folderPreviews?.length === 3 && i === 0 ? 'row-span-2' : ''
-                                      }`}
-                                  />
-                                ))}
+                                {item.folderPreviews.map((previewPath, i) => {
+                                  const isVideoPreview = previewPath.startsWith('video:');
+                                  const srcPath = isVideoPreview ? previewPath.substring(6) : previewPath;
+                                  return isVideoPreview ? (
+                                    <video
+                                      key={i}
+                                      src={`/raw-images${srcPath}`}
+                                      className={`w-full h-full object-cover ${item.folderPreviews?.length === 3 && i === 0 ? 'row-span-2' : ''}`}
+                                      muted loop playsInline preload="metadata"
+                                    />
+                                  ) : (
+                                    <img
+                                      key={i}
+                                      src={`/raw-images${srcPath}`}
+                                      alt=""
+                                      loading="lazy"
+                                      className={`w-full h-full object-cover ${item.folderPreviews?.length === 3 && i === 0 ? 'row-span-2' : ''}`}
+                                    />
+                                  );
+                                })}
                               </div>
                               <div className="absolute bottom-1 right-1 bg-white/70 p-1 rounded backdrop-blur-sm z-10 shadow-sm border border-zinc-200/50">
                                 {item.hasSubDirectories ? <Folders className="w-3.5 h-3.5 text-zinc-600" /> : <Folder className="w-3.5 h-3.5 text-zinc-600" />}
