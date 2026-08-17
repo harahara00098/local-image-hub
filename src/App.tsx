@@ -232,7 +232,7 @@ function PathExplorer() {
 
     // タグのAND検索（すでにタグ検索APIで絞り込み済みの場合はスキップ）
     const targetTagsLower = deferredTagQuery.map(t => t.toLowerCase());
-    const isAlreadyFilteredByApi = deferredTagQuery.length > 0 && data.items.some(item => 
+    const isAlreadyFilteredByApi = deferredTagQuery.length > 0 && data.items.some(item =>
       (item.parentTags || []).some(pt => targetTagsLower.includes((pt || '').toLowerCase()))
     );
 
@@ -564,6 +564,14 @@ function PathExplorer() {
 
   // location.state経由でスライドショーが開始された場合の処理
   useEffect(() => {
+    const tagQuery = location.state?.tagQuery
+    if (tagQuery?.length > 0) {
+      setTagQuery(tagQuery);
+      setIsPlaying(false);
+      if (location.pathname != '/') {
+        navigate('/', { state: { tagQuery: tagQuery } })
+      }
+    }
     const slideshowFromState = location.state?.slideshow;
     if (slideshowFromState) {
       setSlideshowPaths(slideshowFromState.paths);
@@ -576,7 +584,7 @@ function PathExplorer() {
       // navigateTo を使うと direction がセットされてしまうので、ここでは navigate を直接使う
       navigate(location.pathname, { replace: true, state: {} });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 
   const handleRenameDirectory = async () => {
@@ -1222,7 +1230,15 @@ function PathExplorer() {
               {isVideo ? (
                 <video
                   src={`/raw-images${data.path}`}
+                  ref={(el) => {
+                    if (el && isZoomed) el.pause();
+                    else if (el && !isZoomed) el.play().catch(() => {});
+                  }}
                   controls
+                  onClick={(e) => {
+                    (e.target as HTMLVideoElement).pause();
+                    setIsZoomed(true);
+                  }}
                   autoPlay
                   loop={!isPlaying}
                   onEnded={() => {
@@ -1652,7 +1668,7 @@ function PathExplorer() {
                             ) : (
                               <Folder className="w-12 h-12 text-zinc-300 group-hover:text-blue-400 group-hover:scale-110 transition-all duration-300" />
                             )
-                          ) }
+                          )}
                         </div>
                       ) : isVideo ? (
                         <div className="relative w-full h-full bg-black flex items-center justify-center">
@@ -1969,7 +1985,7 @@ function PathExplorer() {
 
       {/* 拡大表示オーバーレイ */}
       <AnimatePresence>
-        {isZoomed && data?.type === "file" && data.isImage && (
+        {isZoomed && data?.type === "file" && (data.isImage || isVideoFile(data.name)) && (
           <motion.div
             key={`zoom-${data.path}`}
             initial={{ opacity: 0 }}
@@ -1984,12 +2000,24 @@ function PathExplorer() {
             >
               <X className="w-6 h-6" />
             </button>
-            <img
-              src={`/raw-images${data.path}`}
-              alt={data.name}
-              className="max-w-full max-h-full object-contain shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            />
+            {isVideoFile(data.name) ? (
+              <video
+                src={`/raw-images${data.path}`}
+                controls
+                autoPlay
+                muted={!isPlaying} // スライドショー再生時以外はミュートで開始
+                loop
+                className="max-w-full max-h-full object-contain shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <img
+                src={`/raw-images${data.path}`}
+                alt={data.name}
+                className="max-w-full max-h-full object-contain shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -2005,10 +2033,8 @@ function GroupView() {
   const [error, setError] = useState<string | null>(null);
   const [intervalSeconds, setIntervalSeconds] = useState<string | number>(3);
   const [isAddingTag, setIsAddingTag] = useState(false);
-  const [addingTagToPath, setAddingTagToPath] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
   const [allTags, setAllTags] = useState<string[]>([]);
-
   const groupPath = location.pathname.replace('/group-view', '');
 
   useEffect(() => {
@@ -2030,93 +2056,6 @@ function GroupView() {
     loadGroupContent();
   }, [groupPath]);
 
-  const handleAddTag = async (path: string) => {
-    if (isAddingTag && addingTagToPath === path) {
-      setIsAddingTag(false);
-      setAddingTagToPath(null);
-      return;
-    }
-    try {
-      const response = await fetch("/api/all-tags");
-      const tags = response.ok ? await response.json() : [];
-      setAllTags(tags);
-      setTagInput("");
-    } catch (err) {
-      setAllTags([]);
-    } finally {
-      setIsAddingTag(true);
-      setAddingTagToPath(path);
-    }
-  };
-
-  const addTag = async (tagName: string, path: string) => {
-    const newTag = tagName.trim();
-    if (newTag === "") return;
-
-    const item = data?.items?.find(i => i.path === path);
-    if (!item) return;
-
-    const currentTags = item.tags || [];
-    if (currentTags.some(t => t.toLowerCase() === newTag.toLowerCase())) {
-      alert("そのタグは既に存在します。");
-      return;
-    }
-
-    try {
-      const response = await fetch("/api/tags", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: path, tags: [...currentTags, newTag] }),
-      });
-      if (!response.ok) throw new Error("タグの更新に失敗しました");
-
-      setData(prev => {
-        if (!prev) return prev;
-        const newItems = prev.items.map(i => {
-          if (i.path === path) {
-            return { ...i, tags: [...(i.tags || []), newTag] };
-          }
-          return i;
-        });
-        return { ...prev, items: newItems };
-      });
-      setTagInput("");
-      setIsAddingTag(false);
-      setAddingTagToPath(null);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "タグの追加に失敗しました");
-    }
-  };
-
-  const handleRemoveTag = async (tagToRemove: string, path: string) => {
-    if (!confirm(`タグ "${tagToRemove}" を削除しますか？`)) return;
-
-    const item = data?.items?.find(i => i.path === path);
-    if (!item) return;
-
-    const newTags = (item.tags || []).filter(t => t !== tagToRemove);
-
-    try {
-      const response = await fetch("/api/tags", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: path, tags: newTags }),
-      });
-      if (!response.ok) throw new Error("タグの削除に失敗しました");
-
-      setData(prev => {
-        if (!prev) return prev;
-        const newItems = prev.items.map(i => {
-          if (i.path === path) return { ...i, tags: newTags };
-          return i;
-        });
-        return { ...prev, items: newItems };
-      });
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "タグの削除に失敗しました");
-    }
-  };
-
   const startSlideshow = () => {
     if (!data || !data.items) return;
     const mediaItems = data.items.filter(item => item.isImage || isVideoFile(item.name));
@@ -2136,6 +2075,89 @@ function GroupView() {
       }
     });
   };
+
+  const handleAddTag = async () => {
+    if (isAddingTag) {
+      setIsAddingTag(false);
+      return;
+    }
+    try {
+      const response = await fetch("/api/all-tags");
+      const tags = response.ok ? await response.json() : [];
+      setAllTags(tags);
+      setTagInput("");
+    } catch (err) {
+      setAllTags([]);
+    } finally {
+      setIsAddingTag(true);
+    }
+  };
+
+  const addTag = async (tagName: string) => {
+    if (!data) return;
+
+    const newTag = tagName.trim();
+    if (newTag === "") return;
+
+    const currentTags = data.currentTags || [];
+
+    if (currentTags.some(t => t.toLowerCase() === newTag.toLowerCase())) {
+      alert("そのタグは既に存在します。");
+      setIsAddingTag(false);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: groupPath, tags: [...currentTags, newTag] }),
+      });
+
+      if (!response.ok) throw new Error("タグの更新に失敗しました");
+
+      setData(prev => {
+        if (!prev) return prev;
+        return { ...prev, currentTags: [...currentTags, newTag] };
+      });
+      setTagInput("");
+      setIsAddingTag(false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "タグの追加に失敗しました");
+    }
+  };
+
+  const handleRemoveTag = async (tagToRemove: string) => {
+    if (!data) return;
+
+    if (!confirm(`タグ "${tagToRemove}" を削除しますか？`)) return;
+
+    const currentTags = data.currentTags || [];
+    const newTags = currentTags.filter(t => t !== tagToRemove);
+
+    try {
+      const response = await fetch("/api/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: groupPath, tags: newTags }),
+      });
+
+      if (!response.ok) throw new Error("タグの削除に失敗しました");
+
+      setData(prev => {
+        if (!prev) return prev;
+        return { ...prev, currentTags: newTags };
+      });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "タグの削除に失敗しました");
+    }
+  };
+
+  // ページが切り替わった際の状態リセット
+  useEffect(() => {
+    setIsAddingTag(false);
+    setTagInput("");
+  }, [groupPath]);
 
   if (loading) {
     return (
@@ -2173,6 +2195,63 @@ function GroupView() {
               フォルダに戻る
             </button>
             <h1 className="text-xl font-bold mt-1 truncate">{decodeURIComponent(groupPath.split('/').pop() || '')}</h1>
+            {data && (
+              <div className="mt-3 flex flex-wrap gap-2 items-center">
+                <Tag className="w-3.5 h-3.5 text-zinc-400" />
+                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">フォルダのタグ:</span>
+                {data.currentTags?.map(tag => (
+                  <div
+                    key={tag}
+                    className="flex items-center gap-1 px-2 py-0.5 bg-blue-600/50 text-blue-200 text-[10px] font-bold rounded-full"
+                  >
+                    <span
+                      onClick={() => navigate(groupPath, { state: { tagQuery: [tag] } })}
+                      className="cursor-pointer hover:underline"
+                      title={`${tag} で検索してホームに戻る`}
+                    >
+                      {tag}
+                    </span>
+                    <button
+                      onClick={() => handleRemoveTag(tag)}
+                      className="p-0.5 hover:text-red-400 transition-colors border-l border-blue-400/50 ml-1 pl-1"
+                      title="タグを削除"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                ))}
+                <div className="relative">
+                  <button
+                    onClick={handleAddTag}
+                    className={`p-1 rounded-full transition-colors ${isAddingTag ? 'bg-blue-100/20 text-blue-300' : 'text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'}`}
+                    title="タグを追加"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                  {isAddingTag && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setIsAddingTag(false)} />
+                      <div className="absolute top-full left-0 mt-2 z-50 bg-zinc-800 border border-zinc-700 rounded-xl shadow-xl p-2 w-48 max-h-60 overflow-auto">
+                        <div className="px-1 pb-1 border-b border-zinc-700 mb-1">
+                          <input
+                            type="text"
+                            autoFocus
+                            placeholder="新規タグを入力..."
+                            className="w-full px-2 py-1.5 text-xs outline-none bg-zinc-900 border border-zinc-700 rounded focus:border-blue-500 transition-colors text-zinc-200"
+                            value={tagInput}
+                            onChange={(e) => setTagInput(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { addTag(tagInput); } }}
+                          />
+                        </div>
+                        {allTags.filter(t => !(data.currentTags || []).includes(t) && t.toLowerCase().includes(tagInput.toLowerCase())).map(tag => (
+                          <button key={tag} onClick={() => addTag(tag)} className="w-full text-left px-3 py-1.5 hover:bg-zinc-700 rounded-lg text-xs text-zinc-300 truncate">{tag}</button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-4">
             <button
@@ -2185,30 +2264,30 @@ function GroupView() {
             </button>
 
             <div className="flex items-center gap-2 bg-zinc-800/50 border border-zinc-700 rounded-lg p-1">
-            <div className="flex items-center gap-1.5 px-2 border-r border-zinc-700">
-              <span className="text-[10px] uppercase font-bold text-zinc-400">秒</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={intervalSeconds}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === '' || /^[0-9０-９]+$/.test(val)) {
-                    setIntervalSeconds(val);
-                  }
-                }}
-                className="w-10 text-center text-xs font-semibold bg-zinc-900 border border-zinc-700 rounded outline-none focus:border-blue-500 py-0.5"
-                title="スライドショーの間隔（秒）"
-              />
-            </div>
-            <button
-              onClick={startSlideshow}
-              className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded transition-colors"
-              title="スライドショーを開始"
-            >
-              <Play className="w-3 h-3 fill-current" />
-              スライドショー
-            </button>
+              <div className="flex items-center gap-1.5 px-2 border-r border-zinc-700">
+                <span className="text-[10px] uppercase font-bold text-zinc-400">秒</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={intervalSeconds}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '' || /^[0-9０-９]+$/.test(val)) {
+                      setIntervalSeconds(val);
+                    }
+                  }}
+                  className="w-10 text-center text-xs font-semibold bg-zinc-900 border border-zinc-700 rounded outline-none focus:border-blue-500 py-0.5"
+                  title="スライドショーの間隔（秒）"
+                />
+              </div>
+              <button
+                onClick={startSlideshow}
+                className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded transition-colors"
+                title="スライドショーを開始"
+              >
+                <Play className="w-3 h-3 fill-current" />
+                スライドショー
+              </button>
             </div>
           </div>
         </div>
@@ -2220,71 +2299,6 @@ function GroupView() {
             <div className="p-3 border-b border-zinc-800">
               <p className="text-sm font-medium text-zinc-300 truncate">{item.name}</p>
             </div>
-            {(item.tags && item.tags.length > 0 || item.parentTags && item.parentTags.length > 0) && (
-              <div className="p-3 border-b border-zinc-800 flex flex-wrap gap-2 items-center relative">
-                <Tag className="w-3.5 h-3.5 text-zinc-400" />
-                {item.tags?.map(tag => (
-                  <div key={tag} className="flex items-center gap-1 pl-2 pr-1 py-0.5 bg-blue-600/50 text-blue-200 text-[10px] font-bold rounded-full">
-                    <span>{tag}</span>
-                    <button
-                      onClick={() => handleRemoveTag(tag, item.path)}
-                      className="p-0.5 hover:text-red-400 transition-colors border-l border-blue-400/50 ml-1 pl-1"
-                      title="タグを削除"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
-                  </div>
-                ))}
-                {item.parentTags?.map(tag => (
-                  <span key={`parent-${tag}`} className="px-2 py-0.5 bg-zinc-700/80 text-zinc-400 text-[10px] font-bold rounded-full" title="親フォルダから継承されたタグ">
-                    {tag}
-                  </span>
-                ))}
-                <div className="relative">
-                  <button
-                    onClick={() => handleAddTag(item.path)}
-                    className={`p-1 rounded-full transition-colors ${isAddingTag && addingTagToPath === item.path ? 'bg-blue-100/20 text-blue-300' : 'text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'}`}
-                    title="タグを追加"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                  </button>
-                  {isAddingTag && addingTagToPath === item.path && (
-                    <>
-                      <div className="fixed inset-0 z-40" onClick={() => { setIsAddingTag(false); setAddingTagToPath(null); }} />
-                      <div className="absolute top-full left-0 mt-2 z-50 bg-zinc-800 border border-zinc-700 rounded-xl shadow-xl p-2 w-48 max-h-60 overflow-auto">
-                        <div className="px-1 pb-1 border-b border-zinc-700 mb-1">
-                          <input
-                            type="text"
-                            autoFocus
-                            placeholder="新規タグを入力..."
-                            className="w-full px-2 py-1.5 text-xs outline-none bg-zinc-900 border border-zinc-700 rounded focus:border-blue-500 transition-colors text-zinc-200"
-                            value={tagInput}
-                            onChange={(e) => setTagInput(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                addTag(tagInput, item.path);
-                              }
-                            }}
-                          />
-                        </div>
-                        {allTags.filter(t => !(item.tags || []).includes(t) && t.toLowerCase().includes(tagInput.toLowerCase())).length === 0 && (
-                          <div className="px-3 py-2 text-[10px] text-zinc-500 italic">既存のタグはありません</div>
-                        )}
-                        {allTags.filter(t => !(item.tags || []).includes(t) && t.toLowerCase().includes(tagInput.toLowerCase())).map(tag => (
-                          <button
-                            key={tag}
-                            onClick={() => addTag(tag, item.path)}
-                            className="w-full text-left px-3 py-1.5 hover:bg-zinc-700 rounded-lg text-xs text-zinc-300 truncate"
-                          >
-                            {tag}
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
             <div className="bg-black flex items-center justify-center">
               {isVideoFile(item.name) ? (
                 <video src={`/raw-images${item.path}`} controls className="max-w-full max-h-[90vh]" />
