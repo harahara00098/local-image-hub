@@ -347,7 +347,7 @@ function PathExplorer() {
 
     const startNum = parseInt(toHalfWidth(slideshowRange.start));
     const endNum = parseInt(toHalfWidth(slideshowRange.end));
-    const intervalNum = parseInt(toHalfWidth(intervalSeconds));
+    const intervalNum = parseFloat(toHalfWidth(intervalSeconds));
 
     if (isNaN(startNum) || isNaN(endNum) || isNaN(intervalNum)) {
       alert("開始位置、終了位置、または秒数を数値で入力してください。");
@@ -459,7 +459,7 @@ function PathExplorer() {
 
   // ページが切り替わった際の状態リセット
   useEffect(() => {
-    const interval = typeof intervalSeconds === 'number' ? intervalSeconds : (parseInt(toHalfWidth(intervalSeconds)) || 3);
+    const interval = typeof intervalSeconds === 'number' ? intervalSeconds : (parseFloat(toHalfWidth(intervalSeconds)) || 3);
     setTimeLeft(interval);
     setIsAddingTag(false);
     setIsMovingFile(false);
@@ -473,7 +473,7 @@ function PathExplorer() {
 
   // スライドショーのタイマー処理
   useEffect(() => {
-    let timer: ReturnType<typeof setInterval> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     if (isPlaying && !loading) {
       if (data?.type === "file") {
@@ -489,9 +489,19 @@ function PathExplorer() {
 
         if (currentIndex !== -1 && currentIndex <= targetEndIndex) {
           if (!isVideo) {
-            timer = setInterval(() => {
-              setTimeLeft((prev) => prev - 1);
-            }, 1000);
+            // 入力された秒数（例: 0.5）をミリ秒（500ms）に変換
+            const intervalMs = parseFloat(toHalfWidth(intervalSeconds)) * 1000;
+            const safeInterval = isNaN(intervalMs) || intervalMs < 10 ? 3000 : intervalMs; // 最低10msを保証
+
+            timer = setTimeout(() => {
+              if (currentIndex < targetEndIndex) {
+                navigateTo(slideshowPaths[currentIndex + 1], 1);
+              } else {
+                const start = parseInt(String(slideshowRange.start)) || 1;
+                const startIdx = Math.max(0, Math.min(start - 1, slideshowPaths.length - 1));
+                navigateTo(slideshowPaths[startIdx], 1);
+              }
+            }, safeInterval);
           }
         } else {
           setIsPlaying(false);
@@ -500,33 +510,33 @@ function PathExplorer() {
     }
 
     return () => {
-      if (timer) clearInterval(timer);
+      if (timer) clearTimeout(timer);
     };
-  }, [isPlaying, loading, data, slideshowPaths, slideshowRange.end, currentPath]);
+  }, [isPlaying, loading, data, slideshowPaths, slideshowRange, intervalSeconds, navigateTo, currentPath]);
 
   // カウントダウン完了時のスライド遷移処理
-  useEffect(() => {
-    if (isPlaying && timeLeft <= 0 && data?.type === "file") {
-      const dataPathNorm = normalizePath(data.path);
-      const currentNorm = normalizePath(currentPath);
+  // useEffect(() => {
+  //   if (isPlaying && timeLeft <= 0 && data?.type === "file") {
+  //     const dataPathNorm = normalizePath(data.path);
+  //     const currentNorm = normalizePath(currentPath);
 
-      if (dataPathNorm !== currentNorm) return;
+  //     if (dataPathNorm !== currentNorm) return;
 
-      const currentIndex = slideshowPaths.findIndex(p => normalizePath(p) === dataPathNorm);
-      const end = parseInt(String(slideshowRange.end)) || slideshowPaths.length;
-      const targetEndIndex = Math.min(end - 1, slideshowPaths.length - 1);
+  //     const currentIndex = slideshowPaths.findIndex(p => normalizePath(p) === dataPathNorm);
+  //     const end = parseInt(String(slideshowRange.end)) || slideshowPaths.length;
+  //     const targetEndIndex = Math.min(end - 1, slideshowPaths.length - 1);
 
-      if (currentIndex !== -1) {
-        if (currentIndex < targetEndIndex) {
-          navigateTo(slideshowPaths[currentIndex + 1], 1);
-        } else {
-          const start = parseInt(String(slideshowRange.start)) || 1;
-          const startIdx = Math.max(0, Math.min(start - 1, slideshowPaths.length - 1));
-          navigateTo(slideshowPaths[startIdx], 1);
-        }
-      }
-    }
-  }, [timeLeft, isPlaying, data, slideshowPaths, slideshowRange, navigateTo]);
+  //     if (currentIndex !== -1) {
+  //       if (currentIndex < targetEndIndex) {
+  //         navigateTo(slideshowPaths[currentIndex + 1], 1);
+  //       } else {
+  //         const start = parseInt(String(slideshowRange.start)) || 1;
+  //         const startIdx = Math.max(0, Math.min(start - 1, slideshowPaths.length - 1));
+  //         navigateTo(slideshowPaths[startIdx], 1);
+  //       }
+  //     }
+  //   }
+  // }, [timeLeft, isPlaying, data, slideshowPaths, slideshowRange, navigateTo]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -994,8 +1004,10 @@ function PathExplorer() {
   };
 
   useEffect(() => {
-    loadPathContent();
-  }, [loadPathContent, tagQuery]);
+    // ファイル間の移動（スライドショー含む）時は、画面が白くチラつくのを防ぐためにサイレント読み込みする
+    const isFile = /\.(jpg|jpeg|png|gif|webp|svg|mp4|webm|ogg|mov)$/i.test(currentPath);
+    loadPathContent(isFile);
+  }, [loadPathContent, tagQuery, currentPath]);
 
   useEffect(() => {
     const fetchReadme = async () => {
@@ -1038,12 +1050,13 @@ function PathExplorer() {
     if (!data) return null;
 
     if (data.type === "file") {
+      if (isZoomed) return null;
       const parentPath = currentPath.substring(0, currentPath.lastIndexOf("/")) || "/";
       const isVideo = isVideoFile(data.name);
 
       return (
         <div
-          key={`file-${data.path}`}
+          key={isPlaying ? "file-slideshow-root" : `file-${data.path}`}
           className="max-w-6xl mx-auto p-4 md:p-8"
         >
           <div className="flex items-center justify-between mb-6">
@@ -1071,11 +1084,11 @@ function PathExplorer() {
           <motion.div
             key={data.path}
             custom={direction}
-            variants={slideVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{
+            variants={isPlaying ? undefined : slideVariants}
+            initial={isPlaying ? false : "enter"}
+            animate={isPlaying ? false : "center"}
+            exit={isPlaying ? undefined : "exit"}
+            transition={isPlaying ? { duration: 0 } : {
               x: { type: "spring", stiffness: 300, damping: 30 },
               opacity: { duration: 0.2 }
             }}
@@ -1232,7 +1245,7 @@ function PathExplorer() {
                   src={`/raw-images${data.path}`}
                   ref={(el) => {
                     if (el && isZoomed) el.pause();
-                    else if (el && !isZoomed) el.play().catch(() => {});
+                    else if (el && !isZoomed) el.play().catch(() => { });
                   }}
                   controls
                   onClick={(e) => {
@@ -1327,7 +1340,7 @@ function PathExplorer() {
                         value={intervalSeconds}
                         onChange={(e) => {
                           const val = e.target.value;
-                          if (val === '' || /^[0-9０-９]+$/.test(val)) {
+                          if (val === '' || /^[0-9０-９]*[\.．]?[0-9０-９]*$/.test(val)) {
                             setIntervalSeconds(val);
                           }
                         }}
@@ -1749,8 +1762,10 @@ function PathExplorer() {
 
   return (
     <div className="relative">
-      <AnimatePresence mode="wait" custom={direction}>
-        {loading ? (
+      <AnimatePresence mode={isPlaying ? undefined : "wait"} custom={direction}>
+        {isPlaying ? (
+          renderContent()
+        ) : loading ? (
           <motion.div
             key="loader"
             initial={{ opacity: 0 }}
@@ -1987,7 +2002,7 @@ function PathExplorer() {
       <AnimatePresence>
         {isZoomed && data?.type === "file" && (data.isImage || isVideoFile(data.name)) && (
           <motion.div
-            key={`zoom-${data.path}`}
+            key="zoom-modal-container"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -2015,6 +2030,8 @@ function PathExplorer() {
                 src={`/raw-images${data.path}`}
                 alt={data.name}
                 className="max-w-full max-h-full object-contain shadow-2xl"
+                width='100%'
+                height='100%'
                 onClick={(e) => e.stopPropagation()}
               />
             )}
@@ -2062,7 +2079,7 @@ function GroupView() {
     if (mediaItems.length === 0) return;
 
     const paths = mediaItems.map(item => item.path);
-    const interval = parseInt(toHalfWidth(intervalSeconds), 10);
+    const interval = parseFloat(toHalfWidth(intervalSeconds));
 
     // PathExplorerにスライドショーの状態を渡して開始
     navigate(paths[0], {
@@ -2184,25 +2201,45 @@ function GroupView() {
 
   return (
     <div className="bg-zinc-800 min-h-screen text-white">
-      <div className="sticky top-0 z-30 bg-zinc-900/80 backdrop-blur-md border-b border-white/10 shadow-lg p-4">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
-          <div className="flex-1">
-            <button
-              onClick={() => navigate(parentPath)}
-              className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors group"
-            >
-              <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-              フォルダに戻る
-            </button>
-            <h1 className="text-xl font-bold mt-1 truncate">{decodeURIComponent(groupPath.split('/').pop() || '')}</h1>
+      <div className="md:sticky top-0 z-30 bg-zinc-900/80 backdrop-blur-md border-b border-white/10 shadow-lg p-3 sm:p-4">
+        <div className="max-w-5xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
+
+          {/* 左側（スマホでは上段）：戻るボタン・タイトル・タグ */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <button
+                onClick={() => navigate(parentPath)}
+                className="flex items-center gap-1.5 text-xs sm:text-sm text-zinc-400 hover:text-white transition-colors group whitespace-nowrap"
+              >
+                <ArrowLeft className="w-4 h-4 shrink-0 group-hover:-translate-x-1 transition-transform" />
+                フォルダに戻る
+              </button>
+
+              {/* スマホ時のみ右上に「フォルダとして表示」をコンパクトに配置 */}
+              <button
+                onClick={() => navigate(groupPath)}
+                className="md:hidden flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold rounded-lg transition-colors whitespace-nowrap"
+                title="通常のフォルダ表示に戻ります"
+              >
+                <Minimize2 className="w-3.5 h-3.5 shrink-0" />
+                <span>フォルダ表示</span>
+              </button>
+            </div>
+
+            <h1 className="text-lg sm:text-xl font-bold mt-1 truncate">
+              {decodeURIComponent(groupPath.split('/').pop() || '')}
+            </h1>
+
             {data && (
-              <div className="mt-3 flex flex-wrap gap-2 items-center">
-                <Tag className="w-3.5 h-3.5 text-zinc-400" />
-                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">フォルダのタグ:</span>
+              <div className="mt-2 flex flex-wrap gap-1.5 items-center">
+                <Tag className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                <span className="hidden sm:inline text-[10px] font-bold text-zinc-400 uppercase tracking-wider whitespace-nowrap">
+                  フォルダのタグ:
+                </span>
                 {data.currentTags?.map(tag => (
                   <div
                     key={tag}
-                    className="flex items-center gap-1 px-2 py-0.5 bg-blue-600/50 text-blue-200 text-[10px] font-bold rounded-full"
+                    className="flex items-center gap-1 px-2 py-0.5 bg-blue-600/50 text-blue-200 text-[11px] font-bold rounded-full whitespace-nowrap"
                   >
                     <span
                       onClick={() => navigate(groupPath, { state: { tagQuery: [tag] } })}
@@ -2213,7 +2250,7 @@ function GroupView() {
                     </span>
                     <button
                       onClick={() => handleRemoveTag(tag)}
-                      className="p-0.5 hover:text-red-400 transition-colors border-l border-blue-400/50 ml-1 pl-1"
+                      className="p-0.5 hover:text-red-400 transition-colors border-l border-blue-400/50 ml-0.5 pl-1"
                       title="タグを削除"
                     >
                       <X className="w-2.5 h-2.5" />
@@ -2253,26 +2290,30 @@ function GroupView() {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-4">
+
+          {/* 右側（スマホでは下段）：アクションボタン群 */}
+          <div className="flex items-center justify-between md:justify-end gap-3 pt-2 md:pt-0 border-t border-white/5 md:border-none">
+            {/* PC時のみ表示する「フォルダとして表示」ボタン */}
             <button
               onClick={() => navigate(groupPath)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-xs font-bold rounded-lg transition-colors"
+              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap"
               title="通常のフォルダ表示に戻ります"
             >
-              <Minimize2 className="w-4 h-4" />
+              <Minimize2 className="w-4 h-4 shrink-0" />
               フォルダとして表示
             </button>
 
-            <div className="flex items-center gap-2 bg-zinc-800/50 border border-zinc-700 rounded-lg p-1">
+            {/* スライドショー設定（スマホでは横幅いっぱいに広げて押しやすく） */}
+            <div className="flex items-center justify-between w-full md:w-auto gap-2 bg-zinc-800/50 border border-zinc-700 rounded-lg p-1">
               <div className="flex items-center gap-1.5 px-2 border-r border-zinc-700">
-                <span className="text-[10px] uppercase font-bold text-zinc-400">秒</span>
+                <span className="text-[10px] uppercase font-bold text-zinc-400 whitespace-nowrap">間隔(秒)</span>
                 <input
                   type="text"
                   inputMode="numeric"
                   value={intervalSeconds}
                   onChange={(e) => {
                     const val = e.target.value;
-                    if (val === '' || /^[0-9０-９]+$/.test(val)) {
+                    if (val === '' || /^[0-9０-９]*[\.．]?[0-9０-９]*$/.test(val)) {
                       setIntervalSeconds(val);
                     }
                   }}
@@ -2282,14 +2323,15 @@ function GroupView() {
               </div>
               <button
                 onClick={startSlideshow}
-                className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded transition-colors"
+                className="flex-1 md:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 md:py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded transition-colors whitespace-nowrap"
                 title="スライドショーを開始"
               >
-                <Play className="w-3 h-3 fill-current" />
+                <Play className="w-3 h-3 fill-current shrink-0" />
                 スライドショー
               </button>
             </div>
           </div>
+
         </div>
       </div>
 
